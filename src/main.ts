@@ -20,7 +20,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors({ origin: corsOrigins() });
 
-  const port = process.env.PORT ?? 4042;
+  const port = process.env.PORT ?? 5002;
   await app.listen(port);
   console.log(`LetterRaid backend running on http://localhost:${port}`);
 }
