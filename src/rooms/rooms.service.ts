@@ -98,9 +98,13 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
     playerId: string,
     displayName: string,
     socketId: string,
+    /** When set, use this code instead of generating one (used by matchmaker). */
+    specificCode?: string,
   ): JoinResult {
     const name = this.validateDisplayName(displayName);
-    const code = generateRoomCode((candidate) => this.rooms.has(candidate));
+    const code = specificCode && !this.rooms.has(specificCode)
+      ? specificCode
+      : generateRoomCode((candidate) => this.rooms.has(candidate));
 
     const player: Player = {
       id: playerId,

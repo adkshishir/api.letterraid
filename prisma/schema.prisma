@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── AUTH ────────────────────────────────────────────────
+
+model Player {
+  id          String   @id @default(cuid())
+  email       String?  @unique
+  displayName String
+  avatarUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Progression
+  level   Int @default(1)
+  xp      Int @default(0)
+  trophies Int @default(0)
+
+  // Stats (denormalized for fast reads)
+  totalGames Int @default(0)
+  totalWins  Int @default(0)
+  winStreak  Int @default(0)
+  bestStreak Int @default(0)
+
+  // Relations
+  sessions    Session[]
+  otpCodes    OtpCode[]
+  playedAsP1  Match[]    @relation("PlayerMatches")
+  playedAsP2  Match[]    @relation("PlayerMatches2")
+  wonMatches  Match[]    @relation("PlayerWins")
+  claims      Claim[]
+
+  @@index([trophies])
+  @@index([email])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  playerId  String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([playerId])
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  playerId  String?
+  email     String
+  code      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  player Player? @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([email, code])
+}
+
+// ─── GAME DATA ──────────────────────────────────────────
+
+model Match {
+  id       String      @id @default(cuid())
+  game     String
+  status   MatchStatus @default(PLAYING)
+  roomCode String      @unique
+
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+
+  player1Id String
+  player2Id String?
+  winnerId  String?
+  tied      Boolean   @default(false)
+
+  player1 Player @relation("PlayerMatches", fields: [player1Id], references: [id])
+  player2 Player? @relation("PlayerMatches2", fields: [player2Id], references: [id])
+  winner  Player? @relation("PlayerWins", fields: [winnerId], references: [id])
+
+  claims Claim[]
+
+  @@index([player1Id])
+  @@index([player2Id])
+  @@index([status])
+  @@index([endedAt])
+}
+
+model Claim {
+  id                 String @id @default(cuid())
+  matchId            String
+  playerId           String
+  word               String
+  points             Int
+  type               ClaimType
+  stolenFromPlayerId String?
+
+  match  Match  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id])
+
+  @@index([matchId])
+  @@index([playerId])
+}
+
+enum MatchStatus {
+  PLAYING
+  COMPLETE
+}
+
+enum ClaimType {
+  POOL
+  STEAL
+}
