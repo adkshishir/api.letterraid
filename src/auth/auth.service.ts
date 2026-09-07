@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { MailService } from '../mail/mail.service.js';
 import type { Player } from '@prisma/client';
 
 const OTP_EXPIRY_MINUTES = 5;
@@ -13,6 +14,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    private readonly mail: MailService,
   ) {}
 
   async requestOtp(email: string): Promise<{ message: string }> {
@@ -37,8 +39,7 @@ export class AuthService {
       data: { email: normalized, code, expiresAt },
     });
 
-    // TODO: Send email via nodemailer (console.log for dev)
-    console.log(`[OTP] ${normalized} → ${code}`);
+    await this.mail.sendOtp(normalized, code);
 
     return { message: 'OTP sent to your email' };
   }

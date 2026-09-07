@@ -10,6 +10,7 @@ import { BaseRoomGateway } from '../rooms/base-room.gateway';
 import { RoomsService } from '../rooms/rooms.service';
 import { GameId } from '../rooms/room.types';
 import { HeistService } from './heist.service';
+import { HeistResultsService } from './heist-results.service';
 import { HeistError, ROUND_DURATION_MS } from './heist.types';
 
 const asString = (v: unknown) => (typeof v === 'string' ? v : '');
@@ -43,6 +44,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
   constructor(
     rooms: RoomsService,
     private readonly heist: HeistService,
+    private readonly results: HeistResultsService,
   ) {
     super(rooms);
   }
@@ -63,6 +65,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     );
     if (started && !this.clocks.has(roomCode)) {
       this.startClocks(roomCode);
+      this.results.startMatch(roomCode, started.playerIds).catch(() => {});
     }
 
     this.pushState(roomCode);
@@ -80,6 +83,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     if (temporary) return;
     this.stopClocks(roomCode);
     this.heist.clear(roomCode);
+    this.results.discard(roomCode);
   }
 
   // ── Heist events ──────────────────────────────────────────────────────────
@@ -99,6 +103,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
         asString(data?.word),
       );
       this.rooms.touch(roomCode);
+      this.results.recordClaim(roomCode, outcome).catch(() => {});
 
       this.emitToRoom(roomCode, 'heist:claimed', {
         playerId: outcome.playerId,
@@ -168,16 +173,19 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     this.clocks.delete(roomCode);
   }
 
-  private endRound(roomCode: string) {
+  private async endRound(roomCode: string) {
     this.stopClocks(roomCode);
 
     const result = this.heist.finish(roomCode);
     if (!result) return;
 
+    const trophyDeltas = await this.results.finishMatch(roomCode, result);
+
     this.emitToRoom(roomCode, 'heist:game-over', {
       scores: result.scores,
       winnerId: result.winnerId,
       tied: result.tied,
+      trophyDeltas,
     });
     this.pushState(roomCode);
   }

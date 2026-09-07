@@ -1,4 +1,4 @@
-import { Controller, Post, Delete, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Delete, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { MatchmakerService } from './matchmaker.service.js';
 import { JwtAuthGuard } from '../auth/auth.guard.js';
 
@@ -36,5 +36,19 @@ export class MatchController {
   async getActiveMatch(@Req() req: { player: { id: string } }) {
     const match = await this.matchmaker.getActiveMatch(req.player.id);
     return { match };
+  }
+
+  @Get('history')
+  @UseGuards(JwtAuthGuard)
+  async getHistory(
+    @Req() req: { player: { id: string } },
+    @Query('limit') limit?: string,
+  ) {
+    const parsed = limit ? Number.parseInt(limit, 10) : undefined;
+    const matches = await this.matchmaker.getHistory(
+      req.player.id,
+      parsed && Number.isFinite(parsed) ? parsed : undefined,
+    );
+    return { matches };
   }
 }

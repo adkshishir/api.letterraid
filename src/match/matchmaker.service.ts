@@ -23,6 +23,15 @@ export interface ActiveMatch {
   opponentName: string;
 }
 
+export interface MatchHistoryEntry {
+  matchId: string;
+  opponentName: string;
+  result: 'W' | 'L' | 'T';
+  score: number;
+  words: number;
+  endedAt: string;
+}
+
 const TROPHY_RANGE_INITIAL = 200;
 const TROPHY_RANGE_EXPANDED = 500;
 const EXPAND_AFTER_MS = 30_000;
@@ -65,6 +74,42 @@ export class MatchmakerService {
 
   getQueueSize(): number {
     return this.queue.length;
+  }
+
+  async getHistory(playerId: string, limit = 10): Promise<MatchHistoryEntry[]> {
+    const matches = await this.prisma.match.findMany({
+      where: {
+        status: 'COMPLETE',
+        OR: [{ player1Id: playerId }, { player2Id: playerId }],
+      },
+      orderBy: { endedAt: 'desc' },
+      take: Math.min(limit, 50),
+      include: {
+        player1: { select: { id: true, displayName: true } },
+        player2: { select: { id: true, displayName: true } },
+      },
+    });
+
+    return matches.map((match) => {
+      const isPlayer1 = match.player1Id === playerId;
+      const opponent = isPlayer1 ? match.player2 : match.player1;
+      const ownScore = isPlayer1 ? match.player1Score : match.player2Score;
+      const ownWords = isPlayer1 ? match.player1Words : match.player2Words;
+      const result: MatchHistoryEntry['result'] = match.tied
+        ? 'T'
+        : match.winnerId === playerId
+          ? 'W'
+          : 'L';
+
+      return {
+        matchId: match.id,
+        opponentName: opponent?.displayName ?? 'Unknown',
+        result,
+        score: ownScore,
+        words: ownWords,
+        endedAt: (match.endedAt ?? match.startedAt).toISOString(),
+      };
+    });
   }
 
   async getActiveMatch(playerId: string): Promise<ActiveMatch | null> {

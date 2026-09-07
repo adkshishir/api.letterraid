@@ -6,6 +6,7 @@ import { RoomsModule } from './rooms/rooms.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { MatchModule } from './match/match.module.js';
+import { LeaderboardModule } from './leaderboard/leaderboard.module.js';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { MatchModule } from './match/match.module.js';
     HealthModule,
     AuthModule,
     MatchModule,
+    LeaderboardModule,
     HeistModule,
   ],
 })

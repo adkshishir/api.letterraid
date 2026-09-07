@@ -83,6 +83,12 @@ model Match {
   winnerId  String?
   tied      Boolean   @default(false)
 
+  // Final score, denormalized so history/profile reads don't need to replay claims.
+  player1Score Int @default(0)
+  player2Score Int @default(0)
+  player1Words Int @default(0)
+  player2Words Int @default(0)
+
   player1 Player @relation("PlayerMatches", fields: [player1Id], references: [id])
   player2 Player? @relation("PlayerMatches2", fields: [player2Id], references: [id])
   winner  Player? @relation("PlayerWins", fields: [winnerId], references: [id])
