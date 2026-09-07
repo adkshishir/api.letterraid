@@ -4,7 +4,16 @@ Carried over from `cahoots/docs/HEIST_IDEAS.md` (written 2026-08-13) when Heist 
 its own project on 2026-08-15. The adjacent-mode ideas from that document now live one per file in
 `games/future-docs/`; what remains here is work on Heist itself and on the project around it.
 
-Nothing below is implemented.
+Nothing below is implemented, except where noted.
+
+**Squads (2v2) shipped 2026-09-07.** Heist rooms can now be created as `'2v2'`: two fixed teams of
+two, teams assigned by join order, teammates unstealable, team total decides the round. See
+`docs/RULES.md` § Squads (2v2) and `docs/SOCKET_EVENTS.md`. **This is a different idea from "Heist
+for 3+ players" below and does not chip away at it** — Squads is exactly two fixed teams of two
+with no ambiguous-opponent problem to solve (a steal always targets an opponent-team member, chosen
+the same way 1v1 already does), while §1 below is still-undone, open-ended N-player free-for-all
+with a genuinely unsolved steal-resolution question. Don't read Squads as a stepping stone toward
+it; they're separate designs.
 
 ## Why this project exists
 
@@ -29,19 +38,26 @@ on two players: the pool is public, every rack is public, and there are no turns
 
 Three things it forces:
 
-- **The player cap.** `MAX_PLAYERS_PER_ROOM = 2` in `backend/src/rooms/room.types.ts` is shared by
-  the whole room registry rather than set per game. In Cahoots that was correct — the other four
-  games are genuinely 2-player. Here it's the only thing in the way, and it should become a
-  per-game value now that Heist doesn't have to share the constant with anyone.
+- **The player cap.** Done as far as Squads needed it: `maxPlayersForMode` in
+  `backend/src/rooms/room.types.ts` is now a per-mode function rather than a single flat
+  `MAX_PLAYERS_PER_ROOM = 2`. What Squads did *not* do is make the cap open-ended — `RoomMode` is a
+  closed `'1v1' | '2v2'` union on purpose. Going past 4 means widening that union (or replacing it
+  with a bare player-count) and is still this section's work, not something Squads did.
 - **Steal resolution.** The current rule is "steals are tried before a plain pool claim, and the
   opponent's longest word before the claimer's own." With three or more players *the opponent* is
   ambiguous. Proposed: the longest word anywhere on the board, ties broken toward the player
   currently leading. That keeps the aggressive reading the 2-player rule already prefers and adds
-  a mild rubber band — the leader is the most attractive target, which is a feature.
+  a mild rubber band — the leader is the most attractive target, which is a feature. **Squads
+  sidesteps this rather than solving it:** with exactly two fixed teams, "the opponent" is always
+  unambiguous (anyone not on your team), so Squads' teammate-exclusion rule isn't a partial answer
+  to this problem and shouldn't be read as one.
 - **Pool scaling.** 8 opening letters and a 4-second drip are tuned for two claimers. Four players
   will strip the pool faster than it refills and the round becomes a starve. Opening size and drip
   interval should scale with player count, and the 2-vowel floor should scale with pool size
-  rather than staying flat.
+  rather than staying flat. **Squads did this for the fixed case of 4** — see
+  `startingLetters`/`letterIntervalMs`/`minPoolVowels` in `backend/src/heist/heist.types.ts` — but
+  those are simple linear formulas picked by feel for exactly two player counts (2 and 4), not
+  validated at N, and still worth revisiting if this section is ever built.
 
 Also worth re-checking at N players: the 250ms per-player claim rate limit is a per-player guard
 so it needs no change, but total server claim throughput scales linearly with the room. The

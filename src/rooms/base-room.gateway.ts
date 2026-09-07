@@ -8,9 +8,11 @@ import {
 import { Server, Socket } from 'socket.io';
 import { RoomsService } from './rooms.service';
 import {
+  DEFAULT_ROOM_MODE,
   GameId,
   RoomError,
   RoomErrorCode,
+  RoomMode,
   toPublicPlayer,
   toPublicRoom,
 } from './room.types';
@@ -18,6 +20,7 @@ import {
 interface CreatePayload {
   playerId?: unknown;
   displayName?: unknown;
+  mode?: unknown;
 }
 
 interface JoinPayload extends CreatePayload {
@@ -31,6 +34,11 @@ interface LeavePayload {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/** Anything but an exact `'1v1'`/`'2v2'` — including a missing field — falls back to the default. */
+function asRoomMode(value: unknown): RoomMode {
+  return value === '1v1' || value === '2v2' ? value : DEFAULT_ROOM_MODE;
 }
 
 /**
@@ -64,12 +72,15 @@ export abstract class BaseRoomGateway implements OnGatewayDisconnect {
         playerId,
         asString(data?.displayName),
         client.id,
+        undefined,
+        asRoomMode(data?.mode),
       );
 
       void client.join(room.code);
       client.emit('room:created', {
         roomCode: room.code,
         players: toPublicRoom(room).players,
+        mode: room.mode,
       });
       this.onPlayerReady(room.code, player.id);
     } catch (err) {
@@ -101,6 +112,7 @@ export abstract class BaseRoomGateway implements OnGatewayDisconnect {
         roomCode: room.code,
         players: publicRoom.players,
         reconnected,
+        mode: room.mode,
       });
 
       // Only the *other* player needs the join broadcast; the joiner already

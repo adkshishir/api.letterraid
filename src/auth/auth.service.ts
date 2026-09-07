@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  ConflictException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MailService } from '../mail/mail.service.js';
@@ -83,7 +87,10 @@ export class AuthService {
           displayName: displayName.trim() || normalized.split('@')[0],
         },
       });
-    } else if (displayName.trim() && displayName.trim() !== player.displayName) {
+    } else if (
+      displayName.trim() &&
+      displayName.trim() !== player.displayName
+    ) {
       player = await this.prisma.player.update({
         where: { id: player.id },
         data: { displayName: displayName.trim() },

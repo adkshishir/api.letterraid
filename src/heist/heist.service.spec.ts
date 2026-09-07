@@ -12,6 +12,9 @@ const ROOM = 'AB2C';
 const ANA = 'ana';
 const BEN = 'ben';
 
+/** 1v1 games have no teams — every player's `team` is null. */
+const solo = (...ids: string[]) => ids.map((id) => ({ id, team: null }));
+
 describe('HeistService', () => {
   let service: HeistService;
   let game: HeistGame;
@@ -20,7 +23,7 @@ describe('HeistService', () => {
   beforeEach(() => {
     service = new HeistService();
     clock = 1_000_000;
-    service.ensureGame(ROOM, [ANA, BEN], clock);
+    service.ensureGame(ROOM, solo(ANA, BEN), clock);
     game = service.getGame(ROOM)!;
   });
 
@@ -96,8 +99,8 @@ describe('HeistService', () => {
 
   describe('starting a round', () => {
     it('will not start with one player', () => {
-      const solo = new HeistService();
-      expect(solo.ensureGame('ZZZZ', [ANA])).toBeNull();
+      const lonely = new HeistService();
+      expect(lonely.ensureGame('ZZZZ', solo(ANA))).toBeNull();
     });
 
     it('deals an opening pool and starts the clock', () => {
@@ -109,7 +112,7 @@ describe('HeistService', () => {
     it('never opens on a pool nobody can spell out of', () => {
       for (let i = 0; i < 200; i++) {
         const fresh = new HeistService();
-        fresh.ensureGame('ZZ' + i, [ANA, BEN]);
+        fresh.ensureGame('ZZ' + i, solo(ANA, BEN));
         const pool = fresh.getGame('ZZ' + i)!.pool;
         expect(
           pool.filter((l) => 'aeiou'.includes(l)).length,
@@ -294,8 +297,8 @@ describe('HeistService', () => {
     it('scores every word its owner is holding at the bell', () => {
       const result = service.finish(ROOM, clock)!;
       expect(result.scores).toEqual([
-        { playerId: ANA, score: 5, words: 1 },
-        { playerId: BEN, score: 2, words: 2 },
+        { playerId: ANA, score: 5, words: 1, team: null },
+        { playerId: BEN, score: 2, words: 2, team: null },
       ]);
       expect(result.winnerId).toBe(ANA);
       expect(result.tied).toBe(false);
@@ -349,8 +352,8 @@ describe('HeistService', () => {
       ]);
       expect(state.pool.sort()).toEqual(['r', 's', 't']);
       expect(state.scores).toEqual([
-        { playerId: ANA, score: 2, words: 1 },
-        { playerId: BEN, score: 0, words: 0 },
+        { playerId: ANA, score: 2, words: 1, team: null },
+        { playerId: BEN, score: 0, words: 0, team: null },
       ]);
     });
 
@@ -361,7 +364,10 @@ describe('HeistService', () => {
 
   describe('restarting', () => {
     it('is refused mid-round', () => {
-      expectCode(() => service.restart(ROOM), 'GAME_IN_PROGRESS');
+      expectCode(
+        () => service.restart(ROOM, solo(ANA, BEN)),
+        'GAME_IN_PROGRESS',
+      );
     });
 
     it('clears the board and restarts the clock', () => {
@@ -369,11 +375,112 @@ describe('HeistService', () => {
       claim(ANA, 'canoe');
       service.finish(ROOM, clock);
 
-      const next = service.restart(ROOM, clock);
+      const next = service.restart(ROOM, solo(ANA, BEN), clock);
       expect(next.words).toEqual([]);
       expect(next.pool).toHaveLength(8);
       expect(next.status).toBe('playing');
       expect(next.endsAt).toBe(clock + 180_000);
+    });
+  });
+
+  describe('squads (2v2)', () => {
+    const ROOM2 = 'SQ2V';
+    const CAL = 'cal';
+    const DEB = 'deb';
+    let squad: HeistGame;
+    let squadClock: number;
+
+    beforeEach(() => {
+      squadClock = 2_000_000;
+      service.ensureGame(
+        ROOM2,
+        [
+          { id: ANA, team: 0 },
+          { id: BEN, team: 0 },
+          { id: CAL, team: 1 },
+          { id: DEB, team: 1 },
+        ],
+        squadClock,
+      );
+      squad = service.getGame(ROOM2)!;
+    });
+
+    const squadClaim = (playerId: string, word: string, step = 1000) => {
+      squadClock += step;
+      return service.claim(ROOM2, playerId, word, squadClock);
+    };
+
+    const squadSetPool = (letters: string) => {
+      squad.pool = [...letters];
+    };
+
+    it('scales the pool, drip and vowel floor for 4 players', () => {
+      expect(squad.pool).toHaveLength(12);
+      expect(squad.minPoolVowels).toBe(3);
+      expect(squad.letterIntervalMs).toBe(3_000);
+      expect(service.letterIntervalMs(ROOM2)).toBe(3_000);
+    });
+
+    it('never offers a teammate’s word as a steal candidate', () => {
+      squad.words = [{ id: 1, word: 'canoe', ownerId: BEN }];
+      squad.nextWordId = 2;
+      squadSetPool('ist');
+      // Ana and Ben are teammates, so `canoe` is never a candidate — not even
+      // a blocked one. With the steal off the table and the pool alone unable
+      // to spell `canoeist`, nothing legal is left.
+      expectCode(() => squadClaim(ANA, 'canoeist'), 'LETTERS_UNAVAILABLE');
+      expect(squad.words).toEqual([{ id: 1, word: 'canoe', ownerId: BEN }]);
+    });
+
+    it('still allows stealing from the opposing team', () => {
+      squad.words = [{ id: 1, word: 'canoe', ownerId: CAL }];
+      squad.nextWordId = 2;
+      squadSetPool('ist');
+      const outcome = squadClaim(ANA, 'canoeist');
+      expect(outcome.type).toBe('steal');
+      expect(outcome.stolenFrom).toBe(CAL);
+    });
+
+    it('still allows upgrading your own word', () => {
+      squad.words = [{ id: 1, word: 'canoe', ownerId: ANA }];
+      squadSetPool('ist');
+      const outcome = squadClaim(ANA, 'canoeist');
+      expect(outcome.stolenFrom).toBe(ANA);
+    });
+
+    it('sums each team’s score and names the winning team, not a player', () => {
+      squad.words = [
+        { id: 1, word: 'canoeist', ownerId: ANA }, // 5
+        { id: 2, word: 'oats', ownerId: BEN }, // 1
+        { id: 3, word: 'rest', ownerId: CAL }, // 1
+        { id: 4, word: 'rested', ownerId: DEB }, // 3
+      ];
+      const result = service.finish(ROOM2, squadClock)!;
+      expect(result.winnerId).toBeNull();
+      expect(result.tied).toBe(false);
+      expect(result.teamScores).toEqual([
+        { team: 0, score: 6, playerIds: [ANA, BEN] },
+        { team: 1, score: 4, playerIds: [CAL, DEB] },
+      ]);
+      expect(result.winningTeam).toBe(0);
+    });
+
+    it('calls a level team total a real tie even when individual scores differ', () => {
+      squad.words = [
+        { id: 1, word: 'canoeist', ownerId: ANA }, // 5, team 0
+        { id: 2, word: 'stare', ownerId: CAL }, // 2
+        { id: 3, word: 'stared', ownerId: DEB }, // 3, team 1 totals 5 too
+      ];
+      const result = service.finish(ROOM2, squadClock)!;
+      expect(result.teamScores).toEqual([
+        { team: 0, score: 5, playerIds: [ANA, BEN] },
+        { team: 1, score: 5, playerIds: [CAL, DEB] },
+      ]);
+      expect(result.tied).toBe(true);
+      expect(result.winningTeam).toBeNull();
+      // Team decides in Squads — never an individual "winner" even though Ana
+      // outscored everyone else on the board.
+      expect(result.winnerId).toBeNull();
     });
   });
 

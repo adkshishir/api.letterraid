@@ -11,6 +11,22 @@
  */
 export type GameId = 'heist';
 
+/**
+ * How many players a room holds and how they're divided.
+ *
+ * Chosen at room creation, not inferred from headcount — `'2v2'` is exactly
+ * two fixed teams of two, not a step toward open-ended N-player free-for-all
+ * (that's a separate, still-undone idea in ROADMAP.md with its own ambiguous-
+ * opponent-steal design problem to solve).
+ */
+export type RoomMode = '1v1' | '2v2';
+
+export const DEFAULT_ROOM_MODE: RoomMode = '1v1';
+
+export function maxPlayersForMode(mode: RoomMode): number {
+  return mode === '2v2' ? 4 : 2;
+}
+
 export type RoomErrorCode =
   | 'ROOM_NOT_FOUND'
   | 'ROOM_FULL'
@@ -38,6 +54,8 @@ export interface Player {
   connected: boolean;
   /** When the player last dropped, used by the disconnect grace period. */
   disconnectedAt: number | null;
+  /** 0 or 1 in a `'2v2'` room, recomputed from join order; always null in `'1v1'`. */
+  team: number | null;
 }
 
 /** The player shape broadcast to clients. */
@@ -45,11 +63,13 @@ export interface PublicPlayer {
   id: string;
   displayName: string;
   connected: boolean;
+  team: number | null;
 }
 
 export interface Room {
   code: string;
   game: GameId;
+  mode: RoomMode;
   players: Player[];
   createdAt: number;
   lastActivityAt: number;
@@ -58,10 +78,9 @@ export interface Room {
 export interface PublicRoom {
   code: string;
   game: GameId;
+  mode: RoomMode;
   players: PublicPlayer[];
 }
-
-export const MAX_PLAYERS_PER_ROOM = 2;
 
 export const DISPLAY_NAME_MAX_LENGTH = 20;
 
@@ -70,6 +89,7 @@ export function toPublicPlayer(player: Player): PublicPlayer {
     id: player.id,
     displayName: player.displayName,
     connected: player.connected,
+    team: player.team,
   };
 }
 
@@ -77,6 +97,7 @@ export function toPublicRoom(room: Room): PublicRoom {
   return {
     code: room.code,
     game: room.game,
+    mode: room.mode,
     players: room.players.map(toPublicPlayer),
   };
 }

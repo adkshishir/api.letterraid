@@ -1,6 +1,6 @@
 import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
 import { RoomsService } from './rooms.service';
-import { MAX_PLAYERS_PER_ROOM } from './room.types';
+import { maxPlayersForMode } from './room.types';
 
 /**
  * The one deliberate exception to STACK.md's "sockets-only, no REST" rule.
@@ -25,8 +25,10 @@ export class RoomsController {
     return {
       code: room.code,
       game: room.game,
+      mode: room.mode,
       playerCount: room.players.length,
-      joinable: room.players.length < MAX_PLAYERS_PER_ROOM,
+      maxPlayers: maxPlayersForMode(room.mode),
+      joinable: room.players.length < maxPlayersForMode(room.mode),
     };
   }
 }

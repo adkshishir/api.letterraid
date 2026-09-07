@@ -52,7 +52,9 @@ export class MatchmakerService {
   enqueue(entry: QueueEntry): void {
     this.queue = this.queue.filter((e) => e.playerId !== entry.playerId);
     this.queue.push(entry);
-    this.logger.log(`Player ${entry.displayName} joined queue (${this.queue.length} in queue)`);
+    this.logger.log(
+      `Player ${entry.displayName} joined queue (${this.queue.length} in queue)`,
+    );
 
     if (!this.tickTimer) {
       this.tickTimer = setInterval(() => this.tick(), TICK_INTERVAL_MS);
@@ -123,7 +125,8 @@ export class MatchmakerService {
 
     if (!match) return null;
 
-    const opponentId = match.player1Id === playerId ? match.player2Id : match.player1Id;
+    const opponentId =
+      match.player1Id === playerId ? match.player2Id : match.player1Id;
     if (!opponentId) return null;
 
     const opponent = await this.prisma.player.findUnique({
@@ -175,7 +178,9 @@ export class MatchmakerService {
         this.queue.splice(Math.min(i, bestIdx), 1);
         i--;
 
-        this.logger.log(`Matched: ${matched[0].displayName} vs ${matched[1].displayName}`);
+        this.logger.log(
+          `Matched: ${matched[0].displayName} vs ${matched[1].displayName}`,
+        );
 
         this.createMatch(matched[0], matched[1]).catch((err) => {
           this.logger.error('Failed to create match', err);
@@ -205,8 +210,19 @@ export class MatchmakerService {
     });
 
     // Pre-create the room so both players can join immediately
-    this.rooms.createRoom('heist', player1.playerId, player1.displayName, `match:${player1.playerId}`, roomCode);
-    this.rooms.joinRoom(roomCode, player2.playerId, player2.displayName, `match:${player2.playerId}`);
+    this.rooms.createRoom(
+      'heist',
+      player1.playerId,
+      player1.displayName,
+      `match:${player1.playerId}`,
+      roomCode,
+    );
+    this.rooms.joinRoom(
+      roomCode,
+      player2.playerId,
+      player2.displayName,
+      `match:${player2.playerId}`,
+    );
 
     const [p1, p2] = await Promise.all([
       this.prisma.player.findUnique({ where: { id: player1.playerId } }),

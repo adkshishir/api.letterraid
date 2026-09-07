@@ -1,4 +1,12 @@
-import { Controller, Post, Get, Put, Body, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Put,
+  Body,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './auth.guard.js';
 import { RequestOtpDto, VerifyOtpDto, UpdateProfileDto } from './auth.types.js';
@@ -34,7 +42,9 @@ export class AuthController {
 
   @Post('logout')
   @UseGuards(JwtAuthGuard)
-  logout(@Req() req: { player: { id: string }; headers: { authorization: string } }) {
+  logout(
+    @Req() req: { player: { id: string }; headers: { authorization: string } },
+  ) {
     const token = req.headers.authorization?.slice(7) ?? '';
     return this.authService.logout(token);
   }

@@ -218,7 +218,9 @@ describe('Rooms (e2e)', () => {
     expect(res.body).toEqual({
       code: roomCode,
       game: 'heist',
+      mode: '1v1',
       playerCount: 1,
+      maxPlayers: 2,
       joinable: true,
     });
   });

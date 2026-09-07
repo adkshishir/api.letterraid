@@ -76,6 +76,30 @@ board. No turns — the property every game in this family is meant to keep.
 - A deliberate exit ends the round.
 - Restart is refused until the clock has run out.
 
+### Squads (2v2)
+- A room is either `'1v1'` (above, unchanged) or `'2v2'`, chosen when the room is created — Heist
+  never auto-detects a mode from headcount, and a `'2v2'` room never starts early: the round waits
+  for all four seats, the same way a `'1v1'` room waits for two.
+- **Teams are assigned by join order, not chosen.** Whoever is sitting in seats 1 and 2 is Team A,
+  seats 3 and 4 are Team B. This is recomputed every time someone joins or deliberately leaves
+  *before* the round starts, so a pre-game leave-and-rejoin can't leave a room lopsided (e.g. one
+  team of three against a team of one). Once the round actually starts, that split is locked in for
+  the round — a mid-round exit ends the round entirely, same as it always has.
+- **Teammates cannot steal from each other.** A teammate's word is never a legal steal target — not
+  even a blocked one, it simply isn't a candidate the server considers. Upgrading your *own* word is
+  still fair game and still scores as a steal from yourself, exactly as in 1v1. Stealing from a
+  member of the *other* team works exactly like today's opponent-stealing rule.
+- **The team total decides the round, not any one player.** Add both teammates' scores together;
+  whichever team's total is higher wins. A tied team total is a real, final result — same "a draw is
+  fine" philosophy as 1v1 — even when the two players on a side didn't score evenly against each
+  other. Individual scores and word counts are still tracked and shown for bragging rights, but they
+  don't decide the round.
+- **The pool scales up for four players** so the board doesn't starve twice as many claimers: the
+  opening pool is 12 letters instead of 8, a fresh letter drops every 3 seconds instead of 4, and the
+  pool is kept topped up to 3 vowels instead of 2. These numbers are a tunable implementation
+  decision (see `startingLetters`/`letterIntervalMs`/`minPoolVowels` in
+  `backend/src/heist/heist.types.ts`), not a locked design rule.
+
 ---
 
 ---
@@ -83,9 +107,10 @@ board. No turns — the property every game in this family is meant to keep.
 ## Shared Platform Notes
 
 - Every game shares room-code-based matchmaking (create room → share code/link → opponent joins).
-  Rooms are exactly 2 players today; `MAX_PLAYERS_PER_ROOM` in
-  `backend/src/rooms/room.types.ts` is the single place that decides it, and lifting it for 3+
-  player Heist is tracked in `ROADMAP.md`.
+  Room capacity is per-mode: `maxPlayersForMode` in `backend/src/rooms/room.types.ts` is the single
+  place that decides it (2 for `'1v1'`, 4 for Heist's `'2v2'` Squads mode). Lifting Heist to an
+  open-ended 3+ free-for-all — a different, still-undone idea from Squads — is tracked in
+  `ROADMAP.md`.
 - Profanity filtering uses one shared service. Heist doesn't warn at all — flagged words are
   removed from its dictionary ahead of time, because a confirmation dialog inside a three-minute
   race would cost the round it interrupted. A future game where the player *writes* something

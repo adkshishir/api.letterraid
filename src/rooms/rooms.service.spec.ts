@@ -1,6 +1,6 @@
 import { ModerationService } from '../moderation/moderation.service';
 import { RoomsService } from './rooms.service';
-import { GameId, MAX_PLAYERS_PER_ROOM, RoomError } from './room.types';
+import { GameId, RoomError, maxPlayersForMode } from './room.types';
 
 describe('RoomsService', () => {
   let service: RoomsService;
@@ -103,7 +103,7 @@ describe('RoomsService', () => {
       } catch (err) {
         expect((err as RoomError).code).toBe('ROOM_FULL');
       }
-      expect(room.players).toHaveLength(MAX_PLAYERS_PER_ROOM);
+      expect(room.players).toHaveLength(maxPlayersForMode('1v1'));
     });
 
     describe('reconnection', () => {
@@ -245,6 +245,89 @@ describe('RoomsService', () => {
 
       expect(service.sweepExpiredRooms(later + 1000)).toBe(0);
       expect(service.getRoom(room.code)).not.toBeNull();
+    });
+  });
+
+  describe('2v2 mode', () => {
+    const createSquad = () =>
+      service.createRoom(
+        'heist',
+        'player-a',
+        'Ana',
+        'socket-a',
+        undefined,
+        '2v2',
+      );
+
+    it('caps a 1v1 room at 2 players, same as before', () => {
+      const { room } = create();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      expect(() =>
+        service.joinRoom(room.code, 'player-c', 'Cal', 'socket-c'),
+      ).toThrow(RoomError);
+      expect(room.players).toHaveLength(maxPlayersForMode('1v1'));
+    });
+
+    it('lets a 2v2 room fill to 4 players and then rejects a fifth', () => {
+      const { room } = createSquad();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      service.joinRoom(room.code, 'player-c', 'Cal', 'socket-c');
+      const result = service.joinRoom(room.code, 'player-d', 'Deb', 'socket-d');
+      expect(result.room.players).toHaveLength(4);
+
+      try {
+        service.joinRoom(room.code, 'player-e', 'Eli', 'socket-e');
+        throw new Error('expected a RoomError');
+      } catch (err) {
+        expect((err as RoomError).code).toBe('ROOM_FULL');
+      }
+    });
+
+    it('keeps team null for every player in a 1v1 room', () => {
+      const { room } = create();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      expect(room.players.map((p) => p.team)).toEqual([null, null]);
+    });
+
+    it('assigns teams by join order — seats 0-1 are team 0, seats 2-3 team 1', () => {
+      const { room } = createSquad();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      service.joinRoom(room.code, 'player-c', 'Cal', 'socket-c');
+      service.joinRoom(room.code, 'player-d', 'Deb', 'socket-d');
+      expect(room.players.map((p) => p.team)).toEqual([0, 0, 1, 1]);
+    });
+
+    it('recomputes on a pre-game leave so a later rejoin can’t leave teams lopsided', () => {
+      const { room } = createSquad();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      service.joinRoom(room.code, 'player-c', 'Cal', 'socket-c');
+      service.joinRoom(room.code, 'player-d', 'Deb', 'socket-d');
+
+      // Ana (seat 0) leaves before the round starts.
+      service.leaveRoom(room.code, 'player-a');
+      expect(room.players.map((p) => p.team)).toEqual([0, 0, 1]);
+
+      // A new player fills the empty seat — team is recomputed fresh from the
+      // current roster rather than staying stuck 1-vs-3.
+      service.joinRoom(room.code, 'player-e', 'Eli', 'socket-e');
+      expect(room.players.map((p) => p.team)).toEqual([0, 0, 1, 1]);
+    });
+
+    it('leaves a reconnecting player’s team alone rather than reassigning it', () => {
+      const { room } = createSquad();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      service.joinRoom(room.code, 'player-c', 'Cal', 'socket-c');
+      service.joinRoom(room.code, 'player-d', 'Deb', 'socket-d');
+
+      service.handleDisconnect('socket-d');
+      const result = service.joinRoom(
+        room.code,
+        'player-d',
+        'Deb',
+        'socket-d2',
+      );
+      expect(result.reconnected).toBe(true);
+      expect(result.player.team).toBe(1);
     });
   });
 

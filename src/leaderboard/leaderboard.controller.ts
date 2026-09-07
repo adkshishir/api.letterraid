@@ -1,4 +1,11 @@
-import { Controller, Get, NotFoundException, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { LeaderboardService } from './leaderboard.service.js';
 import { JwtAuthGuard } from '../auth/auth.guard.js';
 
@@ -9,7 +16,9 @@ export class LeaderboardController {
   @Get()
   top(@Query('limit') limit?: string) {
     const parsed = limit ? Number.parseInt(limit, 10) : undefined;
-    return this.leaderboard.top(parsed && Number.isFinite(parsed) ? parsed : undefined);
+    return this.leaderboard.top(
+      parsed && Number.isFinite(parsed) ? parsed : undefined,
+    );
   }
 
   @Get('me')

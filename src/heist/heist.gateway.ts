@@ -8,7 +8,7 @@ import {
 import { Socket } from 'socket.io';
 import { BaseRoomGateway } from '../rooms/base-room.gateway';
 import { RoomsService } from '../rooms/rooms.service';
-import { GameId } from '../rooms/room.types';
+import { GameId, maxPlayersForMode } from '../rooms/room.types';
 import { HeistService } from './heist.service';
 import { HeistResultsService } from './heist-results.service';
 import { HeistError, ROUND_DURATION_MS } from './heist.types';
@@ -59,13 +59,18 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     const room = this.rooms.getRoom(roomCode);
     if (!room) return;
 
-    const started = this.heist.ensureGame(
-      roomCode,
-      room.players.map((p) => p.id),
-    );
-    if (started && !this.clocks.has(roomCode)) {
-      this.startClocks(roomCode);
-      this.results.startMatch(roomCode, started.playerIds).catch(() => {});
+    // Never start early: a 1v1 room needs 2 players in the seats, a 2v2 room
+    // needs all 4 — a race that starts before every runner is on the line
+    // isn't one.
+    if (room.players.length >= maxPlayersForMode(room.mode)) {
+      const started = this.heist.ensureGame(
+        roomCode,
+        room.players.map((p) => ({ id: p.id, team: p.team })),
+      );
+      if (started && !this.clocks.has(roomCode)) {
+        this.startClocks(roomCode);
+        this.results.startMatch(roomCode, started.playerIds).catch(() => {});
+      }
     }
 
     this.pushState(roomCode);
@@ -125,7 +130,12 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     const roomCode = asString(data?.roomCode);
 
     this.guard(client, () => {
-      this.heist.restart(roomCode);
+      const room = this.rooms.getRoom(roomCode);
+      const players = (room?.players ?? []).map((p) => ({
+        id: p.id,
+        team: p.team,
+      }));
+      this.heist.restart(roomCode, players);
       this.rooms.touch(roomCode);
 
       this.emitToRoom(roomCode, 'heist:restarted', {});
@@ -156,7 +166,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
       if (letter === null) return;
       this.emitToRoom(roomCode, 'heist:letter', { letter });
       this.pushState(roomCode);
-    }, this.heist.letterIntervalMs);
+    }, this.heist.letterIntervalMs(roomCode));
 
     const end = setTimeout(() => this.endRound(roomCode), ROUND_DURATION_MS);
 
@@ -185,6 +195,8 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
       scores: result.scores,
       winnerId: result.winnerId,
       tied: result.tied,
+      teamScores: result.teamScores,
+      winningTeam: result.winningTeam,
       trophyDeltas,
     });
     this.pushState(roomCode);

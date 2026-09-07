@@ -6,7 +6,8 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './auth.guard.js';
 
-const JWT_SECRET = process.env.JWT_SECRET ?? 'lr_dev_secret_change_in_production_2026';
+const JWT_SECRET =
+  process.env.JWT_SECRET ?? 'lr_dev_secret_change_in_production_2026';
 
 @Module({
   imports: [

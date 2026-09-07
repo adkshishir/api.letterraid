@@ -6,12 +6,14 @@ import {
   normalizeRoomCode,
 } from './room-code';
 import {
+  DEFAULT_ROOM_MODE,
   DISPLAY_NAME_MAX_LENGTH,
   GameId,
-  MAX_PLAYERS_PER_ROOM,
   Player,
   Room,
   RoomError,
+  RoomMode,
+  maxPlayersForMode,
 } from './room.types';
 
 /**
@@ -100,11 +102,13 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
     socketId: string,
     /** When set, use this code instead of generating one (used by matchmaker). */
     specificCode?: string,
+    mode: RoomMode = DEFAULT_ROOM_MODE,
   ): JoinResult {
     const name = this.validateDisplayName(displayName);
-    const code = specificCode && !this.rooms.has(specificCode)
-      ? specificCode
-      : generateRoomCode((candidate) => this.rooms.has(candidate));
+    const code =
+      specificCode && !this.rooms.has(specificCode)
+        ? specificCode
+        : generateRoomCode((candidate) => this.rooms.has(candidate));
 
     const player: Player = {
       id: playerId,
@@ -112,12 +116,14 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
       socketId,
       connected: true,
       disconnectedAt: null,
+      team: null,
     };
 
     const now = Date.now();
     const room: Room = {
       code,
       game,
+      mode,
       players: [player],
       createdAt: now,
       lastActivityAt: now,
@@ -125,6 +131,7 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
 
     this.rooms.set(code, room);
     this.socketIndex.set(socketId, code);
+    this.assignTeams(room);
 
     return { room, player, reconnected: false };
   }
@@ -172,7 +179,7 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
       return { room, player: existing, reconnected: true };
     }
 
-    if (room.players.length >= MAX_PLAYERS_PER_ROOM) {
+    if (room.players.length >= maxPlayersForMode(room.mode)) {
       throw new RoomError('ROOM_FULL', 'This room already has two players.');
     }
 
@@ -182,11 +189,13 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
       socketId,
       connected: true,
       disconnectedAt: null,
+      team: null,
     };
 
     room.players.push(player);
     room.lastActivityAt = Date.now();
     this.socketIndex.set(socketId, code);
+    this.assignTeams(room);
 
     return { room, player, reconnected: false };
   }
@@ -206,6 +215,7 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
       this.rooms.delete(room.code);
       return null;
     }
+    this.assignTeams(room);
     return room;
   }
 
@@ -269,5 +279,23 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
 
   private releaseSocket(socketId: string | null): void {
     if (socketId) this.socketIndex.delete(socketId);
+  }
+
+  /**
+   * Recomputes team from current join order rather than fixing it at insertion,
+   * so a pre-game leave/rejoin can't leave teams lopsided (e.g. 1 vs 3). Seats
+   * 0-1 are team 0, seats 2-3 are team 1 — this service has no idea whether a
+   * game has started, so it's safe to call on every roster change; once Heist
+   * actually starts a round it freezes its own snapshot of `team` and never
+   * reads the live room again for that round.
+   */
+  private assignTeams(room: Room): void {
+    if (room.mode !== '2v2') {
+      for (const player of room.players) player.team = null;
+      return;
+    }
+    room.players.forEach((player, index) => {
+      player.team = index < 2 ? 0 : 1;
+    });
   }
 }

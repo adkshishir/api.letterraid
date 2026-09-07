@@ -1,4 +1,12 @@
-import { Controller, Post, Delete, Get, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Delete,
+  Get,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { MatchmakerService } from './matchmaker.service.js';
 import { JwtAuthGuard } from '../auth/auth.guard.js';
 
@@ -8,7 +16,12 @@ export class MatchController {
 
   @Post('queue')
   @UseGuards(JwtAuthGuard)
-  enqueue(@Req() req: { player: { id: string; displayName: string; trophies: number } }) {
+  enqueue(
+    @Req()
+    req: {
+      player: { id: string; displayName: string; trophies: number };
+    },
+  ) {
     this.matchmaker.enqueue({
       playerId: req.player.id,
       displayName: req.player.displayName,

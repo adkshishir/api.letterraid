@@ -27,7 +27,13 @@ export class LeaderboardService {
     const players = await this.prisma.player.findMany({
       orderBy: { trophies: 'desc' },
       take: Math.min(limit, MAX_LIMIT),
-      select: { id: true, displayName: true, avatarUrl: true, trophies: true, level: true },
+      select: {
+        id: true,
+        displayName: true,
+        avatarUrl: true,
+        trophies: true,
+        level: true,
+      },
     });
 
     return players.map((player, index) => ({ rank: index + 1, ...player }));
@@ -41,7 +47,9 @@ export class LeaderboardService {
     if (!player) return null;
 
     const [ahead, totalPlayers] = await Promise.all([
-      this.prisma.player.count({ where: { trophies: { gt: player.trophies } } }),
+      this.prisma.player.count({
+        where: { trophies: { gt: player.trophies } },
+      }),
       this.prisma.player.count(),
     ]);
 

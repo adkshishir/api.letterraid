@@ -11,11 +11,12 @@
 
 export const ROUND_DURATION_MS = 180_000;
 
-/** Letters on the table when the clock starts. */
+/** Letters on the table when the clock starts. The 2-player default — see `startingLetters`. */
 export const STARTING_LETTERS = 8;
 
 /**
- * How often a fresh letter drops into the pool.
+ * How often a fresh letter drops into the pool. The 2-player default — see
+ * `letterIntervalMsFor`.
  *
  * The drip is what keeps a stalled board moving. Without it a pool that neither
  * player can use stays unusable for the rest of the round, and the game becomes
@@ -35,8 +36,32 @@ export const MIN_WORD_LENGTH = 4;
  */
 export const CLAIM_MIN_INTERVAL_MS = 250;
 
-/** Vowels the pool is topped up to before consonants are drawn again. */
+/** Vowels the pool is topped up to before consonants are drawn again. The 2-player default. */
 export const MIN_POOL_VOWELS = 2;
+
+// ── Pool scaling ─────────────────────────────────────────────────────────────
+//
+// Squads (2v2) doubles the claimers racing the same board, so the pool needs
+// to be bigger and refill faster or four players strip it dry between drops.
+// These are tuned by feel, not derived from anything — simple linear formulas
+// kept in one place so they're easy to retune later. Computed once per game at
+// creation time from the actual player count, then stored on `HeistGame`
+// rather than recomputed per letter draw.
+
+/** 8 letters for 2 players, 12 for 4. */
+export function startingLetters(playerCount: number): number {
+  return 8 + (playerCount - 2) * 2;
+}
+
+/** 4s for 2 players, 3s for 4 — floored at 2s so the drip never gets silly. */
+export function letterIntervalMs(playerCount: number): number {
+  return Math.max(2000, 4000 - (playerCount - 2) * 500);
+}
+
+/** Scales with pool size rather than staying flat, same reasoning as the opening pool. */
+export function minPoolVowels(playerCount: number): number {
+  return Math.ceil(startingLetters(playerCount) / 4);
+}
 
 export const VOWELS = 'aeiou';
 
@@ -87,6 +112,13 @@ export interface ClaimedWord {
 export interface HeistGame {
   roomCode: string;
   playerIds: string[];
+  /**
+   * playerId -> team (0 or 1), or null for everyone in a 1v1 game. Frozen at
+   * `ensureGame`/`restart` time from the room's live assignment — a room's
+   * `Player.team` can keep changing after this (nothing downstream re-reads
+   * it), but a round in progress must not have its teams reshuffled mid-play.
+   */
+  teams: Map<string, number | null>;
   /** Letters on the table, in the order they landed. */
   pool: string[];
   /** What's left to draw. Refilled from `LETTER_BAG` when it empties. */
@@ -98,6 +130,10 @@ export interface HeistGame {
   status: HeistStatus;
   /** playerId -> epoch ms of their last claim attempt, for the rate limit. */
   lastClaimAt: Map<string, number>;
+  /** Vowel floor for this game's pool size — see `minPoolVowels`. */
+  minPoolVowels: number;
+  /** Drip rate for this game's player count — see `letterIntervalMs`. */
+  letterIntervalMs: number;
 }
 
 export type HeistErrorCode =
@@ -135,13 +171,30 @@ export interface HeistScore {
   playerId: string;
   score: number;
   words: number;
+  /** 0 or 1 in a 2v2 game, null in 1v1. */
+  team: number | null;
+}
+
+/** A team's combined total. Only present in a 2v2 game — see `HeistResult.teamScores`. */
+export interface HeistTeamScore {
+  team: number;
+  score: number;
+  playerIds: string[];
 }
 
 export interface HeistResult {
   scores: HeistScore[];
-  /** Null on a draw. */
+  /**
+   * Null on a draw, and always null in a 2v2 game — the team total decides a
+   * Squads round, not any one player's score, so there's no individual
+   * "winner" to name even when one teammate outscored the other.
+   */
   winnerId: string | null;
   tied: boolean;
+  /** Null when the game has no teams (1v1). */
+  teamScores: HeistTeamScore[] | null;
+  /** Null in 1v1, or in a 2v2 tie. */
+  winningTeam: number | null;
 }
 
 export interface HeistStateView {
@@ -233,4 +286,22 @@ export function remainder(word: string, base: string): string[] | null {
  */
 export function isSuffixSteal(word: string, base: string): boolean {
   return word.length === base.length + 1 && word.startsWith(base);
+}
+
+/**
+ * True only for two *different* players sharing a non-null team.
+ *
+ * `a === b` returns false on purpose — self-upgrade is a legal steal from
+ * yourself in every mode, and teammates being unstealable must never be read
+ * to also mean a player can't rework their own word.
+ */
+export function isTeammate(
+  teams: Map<string, number | null>,
+  a: string,
+  b: string,
+): boolean {
+  if (a === b) return false;
+  const teamA = teams.get(a) ?? null;
+  const teamB = teams.get(b) ?? null;
+  return teamA !== null && teamA === teamB;
 }

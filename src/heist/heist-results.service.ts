@@ -28,7 +28,10 @@ export class HeistResultsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async startMatch(roomCode: string, playerIds: readonly string[]): Promise<void> {
+  async startMatch(
+    roomCode: string,
+    playerIds: readonly string[],
+  ): Promise<void> {
     if (this.matchIds.has(roomCode)) return;
     if (playerIds.length !== 2) {
       this.matchIds.set(roomCode, null);
@@ -38,7 +41,9 @@ export class HeistResultsService {
     try {
       const [player1Id, player2Id] = playerIds;
 
-      const existing = await this.prisma.match.findUnique({ where: { roomCode } });
+      const existing = await this.prisma.match.findUnique({
+        where: { roomCode },
+      });
       if (existing) {
         this.matchIds.set(roomCode, existing.id);
         return;
@@ -59,7 +64,10 @@ export class HeistResultsService {
       });
       this.matchIds.set(roomCode, match.id);
     } catch (err) {
-      this.logger.error(`Failed to start match for room ${roomCode}`, err as Error);
+      this.logger.error(
+        `Failed to start match for room ${roomCode}`,
+        err as Error,
+      );
       this.matchIds.set(roomCode, null);
     }
   }
@@ -80,7 +88,10 @@ export class HeistResultsService {
         },
       });
     } catch (err) {
-      this.logger.error(`Failed to record claim for room ${roomCode}`, err as Error);
+      this.logger.error(
+        `Failed to record claim for room ${roomCode}`,
+        err as Error,
+      );
     }
   }
 
@@ -117,8 +128,18 @@ export class HeistResultsService {
       ]);
       if (!playerA || !playerB) return null;
 
-      const deltaA = this.trophyDelta(playerA.trophies, playerB.trophies, a, result);
-      const deltaB = this.trophyDelta(playerB.trophies, playerA.trophies, b, result);
+      const deltaA = this.trophyDelta(
+        playerA.trophies,
+        playerB.trophies,
+        a,
+        result,
+      );
+      const deltaB = this.trophyDelta(
+        playerB.trophies,
+        playerA.trophies,
+        b,
+        result,
+      );
 
       await Promise.all([
         this.applyResult(playerA.id, deltaA, a, result),
@@ -128,7 +149,10 @@ export class HeistResultsService {
       void match;
       return { [a.playerId]: deltaA, [b.playerId]: deltaB };
     } catch (err) {
-      this.logger.error(`Failed to finish match for room ${roomCode}`, err as Error);
+      this.logger.error(
+        `Failed to finish match for room ${roomCode}`,
+        err as Error,
+      );
       return null;
     }
   }
@@ -166,7 +190,9 @@ export class HeistResultsService {
     score: { playerId: string; score: number },
     result: HeistResult,
   ): Promise<void> {
-    const player = await this.prisma.player.findUnique({ where: { id: playerId } });
+    const player = await this.prisma.player.findUnique({
+      where: { id: playerId },
+    });
     if (!player) return;
 
     const won = !result.tied && result.winnerId === playerId;

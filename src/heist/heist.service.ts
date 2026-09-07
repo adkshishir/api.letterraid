@@ -9,17 +9,20 @@ import {
   HeistResult,
   HeistScore,
   HeistStateView,
+  HeistTeamScore,
   LETTER_BAG,
   LETTER_INTERVAL_MS,
-  MIN_POOL_VOWELS,
   MIN_WORD_LENGTH,
   ROUND_DURATION_MS,
-  STARTING_LETTERS,
   VOWELS,
   canSpell,
   isSuffixSteal,
+  isTeammate,
   letterCounts,
+  letterIntervalMs,
+  minPoolVowels,
   remainder,
+  startingLetters,
   wordPoints,
 } from './heist.types';
 
@@ -55,22 +58,23 @@ export class HeistService {
    */
   ensureGame(
     roomCode: string,
-    playerIds: readonly string[],
+    players: readonly { id: string; team: number | null }[],
     now = Date.now(),
   ): HeistGame | null {
     const existing = this.games.get(roomCode);
     if (existing) {
-      for (const id of playerIds) {
-        if (!existing.playerIds.includes(id)) existing.playerIds.push(id);
+      for (const p of players) {
+        if (!existing.playerIds.includes(p.id)) existing.playerIds.push(p.id);
       }
       return existing;
     }
 
-    if (playerIds.length < 2) return null;
+    if (players.length < 2) return null;
 
     const game: HeistGame = {
       roomCode,
-      playerIds: [...playerIds],
+      playerIds: players.map((p) => p.id),
+      teams: new Map(players.map((p) => [p.id, p.team])),
       pool: [],
       bag: this.freshBag(),
       words: [],
@@ -79,8 +83,12 @@ export class HeistService {
       endsAt: now + ROUND_DURATION_MS,
       status: 'playing',
       lastClaimAt: new Map(),
+      minPoolVowels: minPoolVowels(players.length),
+      letterIntervalMs: letterIntervalMs(players.length),
     };
-    for (let i = 0; i < STARTING_LETTERS; i++) this.drawInto(game);
+    for (let i = 0; i < startingLetters(players.length); i++) {
+      this.drawInto(game);
+    }
 
     this.games.set(roomCode, game);
     return game;
@@ -94,7 +102,11 @@ export class HeistService {
     this.games.delete(roomCode);
   }
 
-  restart(roomCode: string, now = Date.now()): HeistGame {
+  restart(
+    roomCode: string,
+    players: readonly { id: string; team: number | null }[],
+    now = Date.now(),
+  ): HeistGame {
     const existing = this.games.get(roomCode);
     if (!existing) throw new HeistError('NOT_IN_GAME', 'No game in progress.');
     if (existing.status !== 'complete') {
@@ -103,7 +115,8 @@ export class HeistService {
 
     const game: HeistGame = {
       roomCode,
-      playerIds: [...existing.playerIds],
+      playerIds: players.map((p) => p.id),
+      teams: new Map(players.map((p) => [p.id, p.team])),
       pool: [],
       bag: this.freshBag(),
       words: [],
@@ -112,8 +125,12 @@ export class HeistService {
       endsAt: now + ROUND_DURATION_MS,
       status: 'playing',
       lastClaimAt: new Map(),
+      minPoolVowels: minPoolVowels(players.length),
+      letterIntervalMs: letterIntervalMs(players.length),
     };
-    for (let i = 0; i < STARTING_LETTERS; i++) this.drawInto(game);
+    for (let i = 0; i < startingLetters(players.length); i++) {
+      this.drawInto(game);
+    }
 
     this.games.set(roomCode, game);
     return game;
@@ -143,7 +160,7 @@ export class HeistService {
    */
   private drawInto(game: HeistGame): string {
     const poolVowels = game.pool.filter((l) => VOWELS.includes(l)).length;
-    const wantVowel = poolVowels < MIN_POOL_VOWELS;
+    const wantVowel = poolVowels < game.minPoolVowels;
 
     if (game.bag.length === 0) game.bag = this.freshBag();
 
@@ -169,8 +186,8 @@ export class HeistService {
   }
 
   /** Milliseconds until the next letter is due — the gateway's tick length. */
-  get letterIntervalMs(): number {
-    return LETTER_INTERVAL_MS;
+  letterIntervalMs(roomCode: string): number {
+    return this.games.get(roomCode)?.letterIntervalMs ?? LETTER_INTERVAL_MS;
   }
 
   // ── Claiming ──────────────────────────────────────────────────────────────
@@ -217,8 +234,15 @@ export class HeistService {
 
     const poolCounts = letterCounts(game.pool.join(''));
 
+    // A teammate's word isn't a candidate at all — not even a blocked one, it
+    // simply isn't reachable. Self-upgrade stays legal: `isTeammate` is false
+    // for a player against themselves.
+    const stealable = game.words.filter(
+      (w) => !isTeammate(game.teams, playerId, w.ownerId),
+    );
+
     // Steals, most damaging first.
-    const candidates = [...game.words].sort((a, b) => {
+    const candidates = stealable.sort((a, b) => {
       const mine =
         Number(a.ownerId === playerId) - Number(b.ownerId === playerId);
       if (mine !== 0) return mine;
@@ -340,8 +364,41 @@ export class HeistService {
         playerId,
         score: owned.reduce((sum, w) => sum + wordPoints(w.word), 0),
         words: owned.length,
+        team: game.teams.get(playerId) ?? null,
       };
     });
+
+    const hasTeams = scores.some((s) => s.team !== null);
+
+    if (hasTeams) {
+      // Squads: the team total decides the round, not any individual player's
+      // score — bragging rights stay per-player above, but winning is a team
+      // affair, so `winnerId` has no meaning here.
+      const byTeam = new Map<number, HeistTeamScore>();
+      for (const s of scores) {
+        if (s.team === null) continue;
+        const entry = byTeam.get(s.team) ?? {
+          team: s.team,
+          score: 0,
+          playerIds: [],
+        };
+        entry.score += s.score;
+        entry.playerIds.push(s.playerId);
+        byTeam.set(s.team, entry);
+      }
+      const teamScores = [...byTeam.values()].sort((a, b) => a.team - b.team);
+
+      const best = Math.max(...teamScores.map((t) => t.score));
+      const leaders = teamScores.filter((t) => t.score === best);
+
+      return {
+        scores,
+        winnerId: null,
+        tied: leaders.length !== 1,
+        teamScores,
+        winningTeam: leaders.length === 1 ? leaders[0].team : null,
+      };
+    }
 
     const best = Math.max(...scores.map((s) => s.score));
     const leaders = scores.filter((s) => s.score === best);
@@ -352,6 +409,8 @@ export class HeistService {
       // reasonably finish level on a three-minute board.
       winnerId: leaders.length === 1 ? leaders[0].playerId : null,
       tied: leaders.length !== 1,
+      teamScores: null,
+      winningTeam: null,
     };
   }
 
