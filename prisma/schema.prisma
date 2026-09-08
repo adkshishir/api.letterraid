@@ -17,6 +17,9 @@ model Player {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // A seeded bot persona rather than a real signed-up player — see scripts/seed-bots.mjs.
+  isBot Boolean @default(false)
+
   // Progression
   level   Int @default(1)
   xp      Int @default(0)

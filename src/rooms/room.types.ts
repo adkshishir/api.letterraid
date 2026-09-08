@@ -49,13 +49,26 @@ export interface Player {
   /** Stable per-browser UUID from localStorage; survives reconnects. */
   id: string;
   displayName: string;
-  /** Current socket, or null while disconnected. */
+  /** Current socket, or null while disconnected. For a bot this is a stable
+   * synthetic id (`bot:<playerId>:<roomCode>`), never a real socket.io id. */
   socketId: string | null;
   connected: boolean;
   /** When the player last dropped, used by the disconnect grace period. */
   disconnectedAt: number | null;
   /** 0 or 1 in a `'2v2'` room, recomputed from join order; always null in `'1v1'`. */
   team: number | null;
+  /** A matchmaker-seeded bot opponent rather than a real connected player. */
+  isBot: boolean;
+  /**
+   * The *human* opponent's live trophies at seat time, stashed here only when
+   * this room was created by the matchmaker's bot fallback — see
+   * `MatchmakerService.createBotMatch`. `RoomsService` otherwise has no idea
+   * what a player's trophies are (that's the auth/DB layer's business), so
+   * this is the one place a bot's difficulty tuning can read them from
+   * without a fresh query on every `heist:claim`. Undefined for every
+   * ordinary human-vs-human room.
+   */
+  trophies?: number;
 }
 
 /** The player shape broadcast to clients. */
@@ -64,6 +77,7 @@ export interface PublicPlayer {
   displayName: string;
   connected: boolean;
   team: number | null;
+  isBot: boolean;
 }
 
 export interface Room {
@@ -90,6 +104,7 @@ export function toPublicPlayer(player: Player): PublicPlayer {
     displayName: player.displayName,
     connected: player.connected,
     team: player.team,
+    isBot: player.isBot,
   };
 }
 

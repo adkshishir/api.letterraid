@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RoomsService } from '../rooms/rooms.service.js';
+import { DEFAULT_ROOM_MODE } from '../rooms/room.types.js';
 import type { Player, Match } from '@prisma/client';
 
 export interface QueueEntry {
@@ -38,11 +39,34 @@ const EXPAND_AFTER_MS = 30_000;
 const MATCH_ANY_AFTER_MS = 60_000;
 const TICK_INTERVAL_MS = 1_000;
 
+/**
+ * How long a queued player waits with no human opponent found before the
+ * matchmaker seats a bot instead. Deliberately well inside `EXPAND_AFTER_MS`
+ * — a bot fallback is meant to end the wait, not compete with the human
+ * search's own range expansion.
+ */
+const BOT_FALLBACK_MS = 15_000;
+
+/**
+ * How close (in trophies) a bot persona has to be to the human's own trophies
+ * to count as a "close" pick — see `pickBot`. Several bots can fall inside
+ * this band, so the pick is randomized among them rather than always taking
+ * the single nearest one.
+ */
+const BOT_MATCH_RANGE = 200;
+
 @Injectable()
 export class MatchmakerService {
   private readonly logger = new Logger(MatchmakerService.name);
   private queue: QueueEntry[] = [];
   private tickTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * The seeded bot roster (`scripts/seed-bots.mjs`), queried once and kept
+   * for the service's lifetime — it barely ever changes, so there's nothing
+   * worth re-querying per fallback.
+   */
+  private botRoster: Player[] | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -185,6 +209,21 @@ export class MatchmakerService {
         this.createMatch(matched[0], matched[1]).catch((err) => {
           this.logger.error('Failed to create match', err);
         });
+      } else if (waitTime > BOT_FALLBACK_MS) {
+        // Nobody else in the queue this tick, and this entry has waited long
+        // enough — a human opponent may simply never show up, and an
+        // "expanding range" has nothing to expand into against an empty
+        // queue. Fall back to a bot rather than leaving the player stuck.
+        this.queue.splice(i, 1);
+        i--;
+
+        this.logger.log(
+          `No human match for ${a.displayName} after ${waitTime}ms; falling back to a bot`,
+        );
+
+        this.matchWithBot(a).catch((err) => {
+          this.logger.error('Failed to create bot match', err);
+        });
       }
     }
 
@@ -230,6 +269,111 @@ export class MatchmakerService {
     ]);
 
     return { match, roomCode, player1: p1!, player2: p2! };
+  }
+
+  // ── Bot fallback ──────────────────────────────────────────────────────────
+
+  private async matchWithBot(human: QueueEntry): Promise<void> {
+    const bot = await this.pickBot(human.trophies);
+    if (!bot) {
+      // No bot roster seeded (see scripts/seed-bots.mjs) — put the player
+      // back in queue with a fresh wait rather than dropping them, so a
+      // misconfigured environment degrades to "waits longer" instead of
+      // silently losing their spot.
+      this.logger.error('Bot fallback triggered but no bot roster is seeded');
+      this.queue.push({ ...human, joinedAt: Date.now() });
+      if (!this.tickTimer) {
+        this.tickTimer = setInterval(() => this.tick(), TICK_INTERVAL_MS);
+      }
+      return;
+    }
+
+    this.logger.log(`Bot fallback: ${human.displayName} vs ${bot.displayName}`);
+    await this.createBotMatch(human, bot);
+  }
+
+  /** Queried once and cached — the roster barely ever changes. */
+  private async getBotRoster(): Promise<Player[]> {
+    if (this.botRoster) return this.botRoster;
+    this.botRoster = await this.prisma.player.findMany({
+      where: { isBot: true },
+    });
+    return this.botRoster;
+  }
+
+  /**
+   * Picks a bot persona near the human's trophies, randomized among the
+   * close ones so a given trophy band doesn't always draw the same bot.
+   * Falls back to the single globally-nearest bot when nothing is close.
+   */
+  private async pickBot(humanTrophies: number): Promise<Player | null> {
+    const roster = await this.getBotRoster();
+    if (roster.length === 0) return null;
+
+    const close = roster.filter(
+      (b) => Math.abs(b.trophies - humanTrophies) <= BOT_MATCH_RANGE,
+    );
+    if (close.length > 0) {
+      return close[Math.floor(Math.random() * close.length)];
+    }
+
+    return roster.reduce((nearest, b) =>
+      Math.abs(b.trophies - humanTrophies) <
+      Math.abs(nearest.trophies - humanTrophies)
+        ? b
+        : nearest,
+    );
+  }
+
+  /**
+   * Same shape as `createMatch` — a `Match` row plus a pre-created room — but
+   * the second seat is joined in directly as the bot rather than waiting for
+   * a socket. `RoomsService`'s socket index is keyed by socket id, so the bot
+   * gets a stable synthetic one instead of a real connection.
+   *
+   * The human's live trophies are stashed on their in-memory `Player` (via
+   * `createRoom`'s `trophies` param) so `HeistGateway` can tune the bot's
+   * difficulty to them once the round starts — see `Player.trophies` in
+   * `room.types.ts`.
+   */
+  private async createBotMatch(
+    human: QueueEntry,
+    bot: Player,
+  ): Promise<MatchResult> {
+    const roomCode = this.generateRoomCode();
+
+    const match = await this.prisma.match.create({
+      data: {
+        game: 'heist',
+        roomCode,
+        player1Id: human.playerId,
+        player2Id: bot.id,
+      },
+    });
+
+    this.rooms.createRoom(
+      'heist',
+      human.playerId,
+      human.displayName,
+      `match:${human.playerId}`,
+      roomCode,
+      DEFAULT_ROOM_MODE,
+      false,
+      human.trophies,
+    );
+    this.rooms.joinRoom(
+      roomCode,
+      bot.id,
+      bot.displayName,
+      `bot:${bot.id}:${roomCode}`,
+      true,
+    );
+
+    const p1 = await this.prisma.player.findUnique({
+      where: { id: human.playerId },
+    });
+
+    return { match, roomCode, player1: p1!, player2: bot };
   }
 
   private generateRoomCode(): string {

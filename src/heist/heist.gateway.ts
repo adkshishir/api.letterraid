@@ -11,6 +11,7 @@ import { RoomsService } from '../rooms/rooms.service';
 import { GameId, maxPlayersForMode } from '../rooms/room.types';
 import { HeistService } from './heist.service';
 import { HeistResultsService } from './heist-results.service';
+import { HeistBotService } from './heist-bot.service';
 import { HeistError, ROUND_DURATION_MS } from './heist.types';
 
 const asString = (v: unknown) => (typeof v === 'string' ? v : '');
@@ -45,12 +46,16 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     rooms: RoomsService,
     private readonly heist: HeistService,
     private readonly results: HeistResultsService,
+    private readonly bot: HeistBotService,
   ) {
     super(rooms);
   }
 
   onModuleDestroy() {
-    for (const code of [...this.clocks.keys()]) this.stopClocks(code);
+    for (const code of [...this.clocks.keys()]) {
+      this.bot.stopBot(code);
+      this.stopClocks(code);
+    }
   }
 
   // ── Room hooks ────────────────────────────────────────────────────────────
@@ -70,6 +75,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
       if (started && !this.clocks.has(roomCode)) {
         this.startClocks(roomCode);
         this.results.startMatch(roomCode, started.playerIds).catch(() => {});
+        this.maybeStartBot(roomCode);
       }
     }
 
@@ -86,6 +92,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     // pausing it would hand a losing player a way to freeze the board. A
     // reconnect inside that window rejoins a round already in progress.
     if (temporary) return;
+    this.bot.stopBot(roomCode);
     this.stopClocks(roomCode);
     this.heist.clear(roomCode);
     this.results.discard(roomCode);
@@ -100,26 +107,33 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
   ) {
     const roomCode = asString(data?.roomCode);
     const playerId = asString(data?.playerId);
+    const word = asString(data?.word);
 
-    this.guard(client, () => {
-      const outcome = this.heist.claim(
-        roomCode,
-        playerId,
-        asString(data?.word),
-      );
-      this.rooms.touch(roomCode);
-      this.results.recordClaim(roomCode, outcome).catch(() => {});
+    this.guard(client, () => this.performClaim(roomCode, playerId, word));
+  }
 
-      this.emitToRoom(roomCode, 'heist:claimed', {
-        playerId: outcome.playerId,
-        word: outcome.word,
-        points: outcome.points,
-        type: outcome.type,
-        stolenWord: outcome.stolenWord,
-        stolenFrom: outcome.stolenFrom,
-      });
-      this.pushState(roomCode);
+  /**
+   * The one path a claim takes, whether it came from a real client's
+   * `heist:claim` or a bot's think loop (see `maybeStartBot`) — so a bot's
+   * claims are indistinguishable downstream from a human's: same engine call,
+   * same persistence, same broadcast. Throws `HeistError` on an illegal claim,
+   * exactly like `HeistService.claim` — callers decide what that means for
+   * them (a socket error for a human, a silent whiff for a bot).
+   */
+  private performClaim(roomCode: string, playerId: string, word: string) {
+    const outcome = this.heist.claim(roomCode, playerId, word);
+    this.rooms.touch(roomCode);
+    this.results.recordClaim(roomCode, outcome).catch(() => {});
+
+    this.emitToRoom(roomCode, 'heist:claimed', {
+      playerId: outcome.playerId,
+      word: outcome.word,
+      points: outcome.points,
+      type: outcome.type,
+      stolenWord: outcome.stolenWord,
+      stolenFrom: outcome.stolenFrom,
     });
+    this.pushState(roomCode);
   }
 
   @SubscribeMessage('heist:restart')
@@ -140,6 +154,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
 
       this.emitToRoom(roomCode, 'heist:restarted', {});
       this.startClocks(roomCode);
+      this.maybeStartBot(roomCode);
       this.pushState(roomCode);
     });
   }
@@ -184,6 +199,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
   }
 
   private async endRound(roomCode: string) {
+    this.bot.stopBot(roomCode);
     this.stopClocks(roomCode);
 
     const result = this.heist.finish(roomCode);
@@ -200,6 +216,43 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
       trophyDeltas,
     });
     this.pushState(roomCode);
+  }
+
+  // ── Bot ───────────────────────────────────────────────────────────────────
+
+  /**
+   * Starts the bot's think loop when this room has a bot seat — a no-op for
+   * every ordinary human-vs-human room. Called once a round actually starts,
+   * from both `onPlayerReady` (fresh round) and `handleRestart` (rematch).
+   *
+   * The human's live trophies come from `Player.trophies`, stashed on the
+   * in-memory room player by `MatchmakerService.createBotMatch` — see the
+   * doc comment on `Player.trophies` in `room.types.ts` for why that's where
+   * it lives rather than a fresh DB read here.
+   */
+  private maybeStartBot(roomCode: string): void {
+    const room = this.rooms.getRoom(roomCode);
+    if (!room) return;
+
+    const botPlayer = room.players.find((p) => p.isBot);
+    if (!botPlayer) return;
+
+    const human = room.players.find((p) => !p.isBot);
+    const humanTrophies = human?.trophies ?? 0;
+
+    this.bot.startBot(
+      roomCode,
+      botPlayer.id,
+      humanTrophies,
+      (playerId, word) => {
+        try {
+          this.performClaim(roomCode, playerId, word);
+        } catch {
+          // A whiff — same as a human's failed claim. Nothing further to do;
+          // the bot's next think is already scheduled.
+        }
+      },
+    );
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

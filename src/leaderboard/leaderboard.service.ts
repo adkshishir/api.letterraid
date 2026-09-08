@@ -25,6 +25,7 @@ export class LeaderboardService {
 
   async top(limit = DEFAULT_LIMIT): Promise<LeaderboardEntry[]> {
     const players = await this.prisma.player.findMany({
+      where: { isBot: false },
       orderBy: { trophies: 'desc' },
       take: Math.min(limit, MAX_LIMIT),
       select: {
@@ -46,11 +47,14 @@ export class LeaderboardService {
     });
     if (!player) return null;
 
+    // Bots are real Player rows (see prisma/schema.prisma) so they never show
+    // up here or skew totalPlayers — the public leaderboard is a ranking of
+    // real players, and a matchmaker fallback opponent isn't one.
     const [ahead, totalPlayers] = await Promise.all([
       this.prisma.player.count({
-        where: { trophies: { gt: player.trophies } },
+        where: { trophies: { gt: player.trophies }, isBot: false },
       }),
-      this.prisma.player.count(),
+      this.prisma.player.count({ where: { isBot: false } }),
     ]);
 
     return { rank: ahead + 1, trophies: player.trophies, totalPlayers };

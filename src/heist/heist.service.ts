@@ -14,6 +14,7 @@ import {
   LETTER_INTERVAL_MS,
   MIN_WORD_LENGTH,
   ROUND_DURATION_MS,
+  SuggestedClaim,
   VOWELS,
   canSpell,
   isSuffixSteal,
@@ -25,6 +26,21 @@ import {
   startingLetters,
   wordPoints,
 } from './heist.types';
+
+/** One dictionary entry pre-digested for the bitmask pre-filter — see `suggestClaims`. */
+interface IndexedWord {
+  word: string;
+  /** Bit N set means the word uses letter N of the alphabet at least once (counts ignored). */
+  mask: number;
+  length: number;
+}
+
+/** Bit N set for every distinct letter in `word`. */
+function letterMask(word: string): number {
+  let mask = 0;
+  for (const ch of word) mask |= 1 << (ch.charCodeAt(0) - 97);
+  return mask;
+}
 
 @Injectable()
 export class HeistService {
@@ -38,6 +54,21 @@ export class HeistService {
    * be allowed to add latency to a keystroke.
    */
   private readonly dictionary = new Set(HEIST_DICTIONARY_RAW.split(' '));
+
+  /**
+   * A 26-bit letter-mask index over the whole dictionary, built once at
+   * startup alongside `dictionary`.
+   *
+   * `suggestClaims` needs to ask "which of ~40k+ words does this 8-15 letter
+   * pool support" every couple of seconds per bot game. A per-word bitmask
+   * (which letters it uses, counts ignored) turns that into a cheap bitwise
+   * `(wordMask & ~poolMask) === 0` pre-filter over the whole list, with the
+   * exact — and far smaller — `canSpell`/`letterCounts` check reserved for
+   * words that already pass it.
+   */
+  private readonly dictionaryIndex: IndexedWord[] = [...this.dictionary].map(
+    (word) => ({ word, mask: letterMask(word), length: word.length }),
+  );
 
   /** Exposed so the word list can be sanity-checked without reaching inside. */
   get dictionarySize(): number {
@@ -338,6 +369,89 @@ export class HeistService {
       if (index >= 0) game.pool.splice(index, 1);
     }
     return [...letters];
+  }
+
+  // ── Suggestions ───────────────────────────────────────────────────────────
+
+  /**
+   * Ranked, legal candidate claims against a room's live pool — the bot AI's
+   * only window into the game (`HeistBotService` never touches `dictionary`
+   * or the pool directly).
+   *
+   * Read-only: never mutates `game.pool`/`game.words`. Reuses exactly the
+   * helpers `claim` itself checks a move against, so anything returned here
+   * is guaranteed to still be legal when `claim` is actually called with it a
+   * moment later — nothing here can suggest a move the engine would reject.
+   *
+   * Runs the bitmask pre-filter once per call rather than caching results:
+   * this is meant to run once per bot "think" (every couple of seconds per
+   * bot game), not on a hot path, so there's nothing to over-optimize past
+   * that pre-filter.
+   */
+  suggestClaims(
+    roomCode: string,
+    opts: { playerId: string; limit?: number },
+  ): SuggestedClaim[] {
+    const game = this.games.get(roomCode);
+    if (!game || game.status !== 'playing') return [];
+
+    const limit = opts.limit ?? 25;
+    const poolStr = game.pool.join('');
+    const poolCounts = letterCounts(poolStr);
+    const poolMask = letterMask(poolStr);
+
+    // Same "reachable target" rule `claim` uses: a teammate's word isn't a
+    // candidate at all, not even a blocked one.
+    const targets = game.words
+      .filter((w) => !isTeammate(game.teams, opts.playerId, w.ownerId))
+      .map((claimed) => ({
+        claimed,
+        mask: letterMask(claimed.word),
+        counts: letterCounts(claimed.word),
+      }));
+
+    const results: SuggestedClaim[] = [];
+
+    for (const entry of this.dictionaryIndex) {
+      // Bitwise pre-filter: any letter the word needs that the pool doesn't
+      // have at all rules it out immediately, no per-letter counting yet.
+      const poolEligible = (entry.mask & ~poolMask) === 0;
+      const entryCounts = poolEligible ? letterCounts(entry.word) : null;
+
+      if (entryCounts && canSpell(entryCounts, poolCounts)) {
+        results.push({
+          word: entry.word,
+          points: wordPoints(entry.word),
+          type: 'pool',
+        });
+      }
+
+      for (const target of targets) {
+        if (entry.length <= target.claimed.word.length) continue;
+        // The word must contain every letter the target uses — necessary,
+        // not sufficient, but cheap enough to run against the whole
+        // dictionary before the exact multiset checks below.
+        if ((target.mask & ~entry.mask) !== 0) continue;
+
+        const entryWordCounts = entryCounts ?? letterCounts(entry.word);
+        if (!canSpell(target.counts, entryWordCounts)) continue;
+
+        const extra = remainder(entry.word, target.claimed.word);
+        if (!extra || extra.length === 0) continue;
+        if (isSuffixSteal(entry.word, target.claimed.word)) continue;
+        if (!canSpell(letterCounts(extra.join('')), poolCounts)) continue;
+
+        results.push({
+          word: entry.word,
+          points: wordPoints(entry.word),
+          type: 'steal',
+          target: target.claimed,
+        });
+      }
+    }
+
+    results.sort((a, b) => b.points - a.points);
+    return results.slice(0, limit);
   }
 
   // ── Finishing ─────────────────────────────────────────────────────────────

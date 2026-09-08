@@ -3,7 +3,9 @@ import {
   HeistError,
   HeistGame,
   MIN_WORD_LENGTH,
+  canSpell,
   isSuffixSteal,
+  letterCounts,
   remainder,
   wordPoints,
 } from './heist.types';
@@ -488,5 +490,110 @@ describe('HeistService', () => {
     // A word at the minimum has to be worth something, or the floor is wrong.
     expect(wordPoints('a'.repeat(MIN_WORD_LENGTH))).toBe(1);
     expect(wordPoints('a'.repeat(MIN_WORD_LENGTH - 1))).toBe(0);
+  });
+
+  /**
+   * `suggestClaims` is the bot AI's only window into the game: a bitmask
+   * pre-filter over the whole dictionary, followed by the exact
+   * `canSpell`/`remainder`/`isSuffixSteal` checks `claim` itself uses. These
+   * tests care about one thing above all — that the pre-filter never lets a
+   * candidate through that `claim` would actually reject.
+   */
+  describe('suggestClaims', () => {
+    it('returns nothing for a room with no game', () => {
+      expect(service.suggestClaims('NOPE', { playerId: ANA })).toEqual([]);
+    });
+
+    it('returns nothing once the round is over', () => {
+      service.finish(ROOM, clock);
+      expect(service.suggestClaims(ROOM, { playerId: ANA })).toEqual([]);
+    });
+
+    it('only suggests real dictionary words the live pool can actually spell', () => {
+      setPool('canoetsr');
+      const suggestions = service.suggestClaims(ROOM, { playerId: ANA });
+      expect(suggestions.length).toBeGreaterThan(0);
+
+      const poolCounts = letterCounts(game.pool.join(''));
+      for (const s of suggestions) {
+        expect(service.isWord(s.word)).toBe(true);
+        if (s.type === 'pool') {
+          expect(canSpell(letterCounts(s.word), poolCounts)).toBe(true);
+        }
+      }
+    });
+
+    it('respects letter multiplicity, not just which letters are present', () => {
+      // The bitmask pre-filter can't tell 'coot' (needs two o's) from a pool
+      // holding only one — the exact canSpell check right after it must.
+      setPool('caot');
+      const suggestions = service.suggestClaims(ROOM, { playerId: ANA });
+      expect(suggestions.some((s) => s.word === 'coot')).toBe(false);
+    });
+
+    it('every suggested pool claim is actually accepted by claim()', () => {
+      setPool('canoetsrle');
+      const [top] = service.suggestClaims(ROOM, { playerId: ANA });
+      expect(top).toBeDefined();
+      expect(() => claim(ANA, top.word)).not.toThrow();
+    });
+
+    it('ranks candidates by points, highest first', () => {
+      setPool('canoetsrle');
+      const suggestions = service.suggestClaims(ROOM, { playerId: ANA });
+      for (let i = 1; i < suggestions.length; i++) {
+        expect(suggestions[i - 1].points).toBeGreaterThanOrEqual(
+          suggestions[i].points,
+        );
+      }
+    });
+
+    it('suggests legal steals using the same rules claim() enforces, and they resolve', () => {
+      game.words = [{ id: 1, word: 'canoe', ownerId: BEN }];
+      setPool('istx');
+
+      const suggestions = service.suggestClaims(ROOM, { playerId: ANA });
+      const steal = suggestions.find(
+        (s) => s.type === 'steal' && s.word === 'canoeist',
+      );
+      expect(steal).toBeDefined();
+      expect(steal!.target?.word).toBe('canoe');
+      expect(() => claim(ANA, steal!.word)).not.toThrow();
+    });
+
+    it('never rejects a suggested steal the way claim() would (letters unavailable)', () => {
+      game.words = [{ id: 1, word: 'canoe', ownerId: BEN }];
+      // 'z' isn't enough to steal 'canoe' into anything real; nothing should
+      // be offered that claim() would then bounce.
+      setPool('z');
+      const suggestions = service.suggestClaims(ROOM, { playerId: ANA });
+      expect(suggestions.every((s) => s.type !== 'steal')).toBe(true);
+    });
+
+    it('never offers a suffix-only steal, same as claim()', () => {
+      game.words = [{ id: 1, word: 'canoe', ownerId: BEN }];
+      setPool('s');
+      const suggestions = service.suggestClaims(ROOM, { playerId: ANA });
+      expect(suggestions.some((s) => s.word === 'canoes')).toBe(false);
+    });
+
+    it('never offers a teammate’s word as a steal target', () => {
+      const squadRoom = 'SQ01';
+      const squadGame = service.ensureGame(
+        squadRoom,
+        [
+          { id: ANA, team: 0 },
+          { id: BEN, team: 0 },
+          { id: 'cal', team: 1 },
+          { id: 'deb', team: 1 },
+        ],
+        clock,
+      )!;
+      squadGame.words = [{ id: 1, word: 'canoe', ownerId: BEN }];
+      squadGame.pool = [...'istx'];
+
+      const suggestions = service.suggestClaims(squadRoom, { playerId: ANA });
+      expect(suggestions.some((s) => s.type === 'steal')).toBe(false);
+    });
   });
 });
