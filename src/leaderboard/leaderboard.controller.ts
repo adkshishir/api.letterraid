@@ -6,15 +6,21 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { LeaderboardService } from './leaderboard.service.js';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { LeaderboardService, LeaderboardEntry, MyRank } from './leaderboard.service.js';
 import { JwtAuthGuard } from '../auth/auth.guard.js';
 
+@ApiTags('leaderboard')
 @Controller('leaderboard')
 export class LeaderboardController {
   constructor(private readonly leaderboard: LeaderboardService) {}
 
   @Get()
-  top(@Query('limit') limit?: string) {
+  @ApiOperation({
+    summary: 'Top players by trophies',
+    description: 'Public — no auth required. Bots never appear here.',
+  })
+  top(@Query('limit') limit?: string): Promise<LeaderboardEntry[]> {
     const parsed = limit ? Number.parseInt(limit, 10) : undefined;
     return this.leaderboard.top(
       parsed && Number.isFinite(parsed) ? parsed : undefined,
@@ -23,7 +29,9 @@ export class LeaderboardController {
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  async myRank(@Req() req: { player: { id: string } }) {
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: 'The caller’s own rank, even if outside the top list' })
+  async myRank(@Req() req: { player: { id: string } }): Promise<MyRank> {
     const rank = await this.leaderboard.myRank(req.player.id);
     if (!rank) throw new NotFoundException('Player not found');
     return rank;

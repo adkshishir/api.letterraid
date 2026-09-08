@@ -3,6 +3,8 @@
  * that doc first if any of these shapes need to move.
  */
 
+import { ApiProperty } from '@nestjs/swagger';
+
 /**
  * Every game LetterRaid serves. Heist is the flagship and, for now, the only
  * one — this stays a union type rather than collapsing to a bare literal so
@@ -118,4 +120,14 @@ export function toPublicRoom(room: Room): PublicRoom {
     mode: room.mode,
     players: room.players.map(toPublicPlayer),
   };
+}
+
+/** Response for `GET /rooms/:code` — the one deliberate REST exception, see `RoomsController`. */
+export class RoomLookup {
+  @ApiProperty() code!: string;
+  @ApiProperty({ enum: ['heist'] }) game!: GameId;
+  @ApiProperty({ enum: ['1v1', '2v2'] }) mode!: RoomMode;
+  @ApiProperty() playerCount!: number;
+  @ApiProperty() maxPlayers!: number;
+  @ApiProperty() joinable!: boolean;
 }

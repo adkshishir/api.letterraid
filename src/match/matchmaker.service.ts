@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RoomsService } from '../rooms/rooms.service.js';
 import { DEFAULT_ROOM_MODE } from '../rooms/room.types.js';
@@ -18,19 +19,20 @@ export interface MatchResult {
   player2: Player;
 }
 
-export interface ActiveMatch {
-  matchId: string;
-  roomCode: string;
-  opponentName: string;
+export class ActiveMatch {
+  @ApiProperty() matchId!: string;
+  @ApiProperty({ description: 'Join /room/:roomCode over the /heist socket namespace.' })
+  roomCode!: string;
+  @ApiProperty() opponentName!: string;
 }
 
-export interface MatchHistoryEntry {
-  matchId: string;
-  opponentName: string;
-  result: 'W' | 'L' | 'T';
-  score: number;
-  words: number;
-  endedAt: string;
+export class MatchHistoryEntry {
+  @ApiProperty() matchId!: string;
+  @ApiProperty() opponentName!: string;
+  @ApiProperty({ enum: ['W', 'L', 'T'] }) result!: 'W' | 'L' | 'T';
+  @ApiProperty() score!: number;
+  @ApiProperty() words!: number;
+  @ApiProperty() endedAt!: string;
 }
 
 const TROPHY_RANGE_INITIAL = 200;

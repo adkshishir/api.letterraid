@@ -1,15 +1,18 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { ApiProperty } from '@nestjs/swagger';
 import type { Player } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RoomsService } from '../rooms/rooms.service.js';
 import { generateRoomCode } from '../rooms/room-code.js';
 import { DEFAULT_ROOM_MODE } from '../rooms/room.types.js';
-import { BotTier } from './heist-bot.service.js';
+import { BOT_TIERS } from './heist-bot.service.js';
+import type { BotTier } from './heist-bot.service.js';
 
-export interface PracticeMatch {
-  roomCode: string;
-  botName: string;
-  tier: BotTier;
+export class PracticeMatch {
+  @ApiProperty({ description: 'Join /room/:roomCode over the /heist socket namespace.' })
+  roomCode!: string;
+  @ApiProperty() botName!: string;
+  @ApiProperty({ enum: BOT_TIERS }) tier!: BotTier;
 }
 
 /**

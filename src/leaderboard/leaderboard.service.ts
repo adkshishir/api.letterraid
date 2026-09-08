@@ -1,22 +1,23 @@
 import { Injectable } from '@nestjs/common';
+import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 
-export interface LeaderboardEntry {
-  rank: number;
-  id: string;
-  displayName: string;
-  avatarUrl: string | null;
-  trophies: number;
-  level: number;
+export class LeaderboardEntry {
+  @ApiProperty() rank!: number;
+  @ApiProperty() id!: string;
+  @ApiProperty() displayName!: string;
+  @ApiProperty({ nullable: true, type: String }) avatarUrl!: string | null;
+  @ApiProperty() trophies!: number;
+  @ApiProperty() level!: number;
 }
 
-export interface MyRank {
-  rank: number;
-  trophies: number;
-  totalPlayers: number;
+export class MyRank {
+  @ApiProperty() rank!: number;
+  @ApiProperty() trophies!: number;
+  @ApiProperty() totalPlayers!: number;
 }
 
 @Injectable()
