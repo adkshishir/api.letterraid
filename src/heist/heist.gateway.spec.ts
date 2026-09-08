@@ -4,6 +4,8 @@ import { HeistGateway } from './heist.gateway';
 import { HeistService } from './heist.service';
 import { HeistResultsService } from './heist-results.service';
 import { HeistBotService } from './heist-bot.service';
+import { TournamentsService } from '../tournaments/tournaments.service';
+import { PracticeService } from './practice.service';
 
 /**
  * `HeistService.ensureGame` will happily start a round the moment it sees 2
@@ -29,7 +31,17 @@ describe('HeistGateway', () => {
 
     const bot = new HeistBotService(heist);
 
-    gateway = new HeistGateway(rooms, heist, results, bot);
+    const tournaments = {
+      recordResult: jest.fn(),
+    } as unknown as TournamentsService;
+
+    const practice = {
+      isPractice: jest.fn().mockReturnValue(false),
+      tierFor: jest.fn().mockReturnValue(null),
+      clear: jest.fn(),
+    } as unknown as PracticeService;
+
+    gateway = new HeistGateway(rooms, heist, results, bot, tournaments, practice);
     // Broadcasts only fire once a game actually starts and pushes state; a
     // stub is enough since these tests never assert on socket traffic.
     (gateway as unknown as { server: unknown }).server = {

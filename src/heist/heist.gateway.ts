@@ -14,6 +14,7 @@ import { HeistResultsService } from './heist-results.service';
 import { HeistBotService } from './heist-bot.service';
 import { HeistError, ROUND_DURATION_MS } from './heist.types';
 import { TournamentsService } from '../tournaments/tournaments.service';
+import { PracticeService } from './practice.service';
 
 const asString = (v: unknown) => (typeof v === 'string' ? v : '');
 
@@ -49,6 +50,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     private readonly results: HeistResultsService,
     private readonly bot: HeistBotService,
     private readonly tournaments: TournamentsService,
+    private readonly practice: PracticeService,
   ) {
     super(rooms);
   }
@@ -76,7 +78,10 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
       );
       if (started && !this.clocks.has(roomCode)) {
         this.startClocks(roomCode);
-        this.results.startMatch(roomCode, started.playerIds).catch(() => {});
+        // Practice rooms never touch the ranked pipeline — see `PracticeService`.
+        if (!this.practice.isPractice(roomCode)) {
+          this.results.startMatch(roomCode, started.playerIds).catch(() => {});
+        }
         this.maybeStartBot(roomCode);
       }
     }
@@ -98,6 +103,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     this.stopClocks(roomCode);
     this.heist.clear(roomCode);
     this.results.discard(roomCode);
+    this.practice.clear(roomCode);
   }
 
   // ── Heist events ──────────────────────────────────────────────────────────
@@ -211,7 +217,10 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     // `TournamentsService.recordResult`.
     this.tournaments.recordResult(roomCode, result);
 
-    const trophyDeltas = await this.results.finishMatch(roomCode, result);
+    // Practice rooms never touch the ranked pipeline — see `PracticeService`.
+    const trophyDeltas = this.practice.isPractice(roomCode)
+      ? null
+      : await this.results.finishMatch(roomCode, result);
 
     this.emitToRoom(roomCode, 'heist:game-over', {
       scores: result.scores,
@@ -231,10 +240,12 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
    * every ordinary human-vs-human room. Called once a round actually starts,
    * from both `onPlayerReady` (fresh round) and `handleRestart` (rematch).
    *
-   * The human's live trophies come from `Player.trophies`, stashed on the
-   * in-memory room player by `MatchmakerService.createBotMatch` — see the
-   * doc comment on `Player.trophies` in `room.types.ts` for why that's where
-   * it lives rather than a fresh DB read here.
+   * A practice room (see `PracticeService`) uses the tier the player
+   * explicitly chose; every other bot seat — the ranked matchmaker's
+   * fallback — is tuned off the human's live trophies, stashed on the
+   * in-memory room player by `MatchmakerService.createBotMatch` (see the doc
+   * comment on `Player.trophies` in `room.types.ts` for why that's where it
+   * lives rather than a fresh DB read here).
    */
   private maybeStartBot(roomCode: string): void {
     const room = this.rooms.getRoom(roomCode);
@@ -243,22 +254,24 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     const botPlayer = room.players.find((p) => p.isBot);
     if (!botPlayer) return;
 
+    const claimFn = (playerId: string, word: string) => {
+      try {
+        this.performClaim(roomCode, playerId, word);
+      } catch {
+        // A whiff — same as a human's failed claim. Nothing further to do;
+        // the bot's next think is already scheduled.
+      }
+    };
+
+    const practiceTier = this.practice.tierFor(roomCode);
+    if (practiceTier) {
+      this.bot.startPracticeBot(roomCode, botPlayer.id, practiceTier, claimFn);
+      return;
+    }
+
     const human = room.players.find((p) => !p.isBot);
     const humanTrophies = human?.trophies ?? 0;
-
-    this.bot.startBot(
-      roomCode,
-      botPlayer.id,
-      humanTrophies,
-      (playerId, word) => {
-        try {
-          this.performClaim(roomCode, playerId, word);
-        } catch {
-          // A whiff — same as a human's failed claim. Nothing further to do;
-          // the bot's next think is already scheduled.
-        }
-      },
-    );
+    this.bot.startBot(roomCode, botPlayer.id, humanTrophies, claimFn);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

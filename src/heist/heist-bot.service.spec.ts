@@ -1,17 +1,19 @@
 import { HeistService } from './heist.service';
 import { HeistBotService, TIER_CONFIG, tierFor } from './heist-bot.service';
 
-const TIERS_BY_SKILL = ['bronze', 'silver', 'gold', 'diamond'] as const;
+const TIERS_BY_SKILL = ['rookie', 'bronze', 'silver', 'gold', 'diamond'] as const;
 
 describe('tierFor', () => {
   it('maps the documented trophy bands to the right tier', () => {
-    expect(tierFor(0)).toBe('bronze');
-    expect(tierFor(299)).toBe('bronze');
-    expect(tierFor(300)).toBe('silver');
-    expect(tierFor(799)).toBe('silver');
-    expect(tierFor(800)).toBe('gold');
-    expect(tierFor(1499)).toBe('gold');
-    expect(tierFor(1500)).toBe('diamond');
+    expect(tierFor(0)).toBe('rookie');
+    expect(tierFor(99)).toBe('rookie');
+    expect(tierFor(100)).toBe('bronze');
+    expect(tierFor(399)).toBe('bronze');
+    expect(tierFor(400)).toBe('silver');
+    expect(tierFor(899)).toBe('silver');
+    expect(tierFor(900)).toBe('gold');
+    expect(tierFor(1599)).toBe('gold');
+    expect(tierFor(1600)).toBe('diamond');
     expect(tierFor(5000)).toBe('diamond');
   });
 
@@ -28,7 +30,7 @@ describe('tierFor', () => {
 });
 
 describe('TIER_CONFIG', () => {
-  /** Every field in the four tier configs, walked bronze -> diamond in order. */
+  /** Every field in the five tier configs, walked rookie -> diamond in order. */
   const ordered = TIERS_BY_SKILL.map((tier) => TIER_CONFIG[tier]);
 
   const isMonotonic = (values: number[], direction: 'inc' | 'dec') => {
@@ -121,9 +123,9 @@ describe('HeistBotService', () => {
     const performClaim = jest.fn<void, [string, string]>();
     bot.startBot(ROOM, BOT_ID, 0, performClaim);
 
-    // Bronze's think window tops out at 6000ms (before jitter, which can add
-    // up to another 20%) — 8s comfortably clears it either way.
-    jest.advanceTimersByTime(8_000);
+    // Rookie (0 trophies)'s think window tops out at 11000ms, plus up to 20%
+    // jitter — 14s comfortably clears it.
+    jest.advanceTimersByTime(14_000);
 
     expect(performClaim).toHaveBeenCalled();
     const [playerId, word] = performClaim.mock.calls[0];
@@ -137,7 +139,7 @@ describe('HeistBotService', () => {
     bot.startBot(ROOM, BOT_ID, 0, performClaim);
 
     heist.clear(ROOM);
-    jest.advanceTimersByTime(8_000);
+    jest.advanceTimersByTime(14_000);
 
     expect(performClaim).not.toHaveBeenCalled();
   });
@@ -148,13 +150,55 @@ describe('HeistBotService', () => {
 
   it('keeps thinking (reschedules) after a claim attempt', () => {
     const performClaim = jest.fn();
-    bot.startBot(ROOM, BOT_ID, 0, performClaim);
+    // Diamond's tight, low-jitter interval keeps this test fast — the
+    // "keeps rescheduling" behavior itself doesn't depend on tier.
+    bot.startPracticeBot(ROOM, BOT_ID, 'diamond', performClaim);
 
-    jest.advanceTimersByTime(8_000);
+    jest.advanceTimersByTime(2_000);
     const firstCalls = performClaim.mock.calls.length;
     expect(firstCalls).toBeGreaterThan(0);
 
-    jest.advanceTimersByTime(8_000);
+    jest.advanceTimersByTime(2_000);
     expect(performClaim.mock.calls.length).toBeGreaterThan(firstCalls);
+  });
+
+  it('lets a practice match pick an explicit tier regardless of trophies', () => {
+    const performClaim = jest.fn();
+    bot.startPracticeBot(ROOM, BOT_ID, 'diamond', performClaim);
+
+    // Diamond's think window tops out at 1600ms, plus up to 20% jitter.
+    jest.advanceTimersByTime(2_000);
+
+    expect(performClaim).toHaveBeenCalled();
+  });
+
+  it('never steals a struggling human’s only word at the rookie tier', () => {
+    // Seed the human owning exactly one word directly on the live game object
+    // — deterministic, and sidesteps needing the random starting pool to
+    // happen to spell a specific word. The bot (rookie) should never take it
+    // while she's down to just that one, even across many think cycles.
+    const seeded = heist.getGame(ROOM)!;
+    seeded.words.push({ id: seeded.nextWordId++, word: 'rice', ownerId: HUMAN });
+
+    const performClaim = jest.fn((playerId: string, word: string) => {
+      try {
+        heist.claim(ROOM, playerId, word);
+      } catch {
+        // A whiff — fine, matches production's swallow-and-reschedule behavior.
+      }
+    });
+    bot.startBot(ROOM, BOT_ID, 0, performClaim);
+
+    for (let i = 0; i < 20; i++) {
+      jest.advanceTimersByTime(14_000);
+    }
+
+    const game = heist.getGame(ROOM)!;
+    const anasWord = game.words.find((w) => w.word === 'rice');
+    // Either she still owns it, or she's since claimed more than one word
+    // (making the mercy rule no longer apply) — never "the bot took her
+    // single word".
+    const anaWordCount = game.words.filter((w) => w.ownerId === HUMAN).length;
+    expect(anasWord?.ownerId === HUMAN || anaWordCount > 1).toBe(true);
   });
 });

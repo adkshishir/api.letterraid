@@ -2,7 +2,15 @@ import { Injectable } from '@nestjs/common';
 import { HeistService } from './heist.service';
 import { MIN_WORD_LENGTH, SuggestedClaim } from './heist.types';
 
-export type BotTier = 'bronze' | 'silver' | 'gold' | 'diamond';
+export type BotTier = 'rookie' | 'bronze' | 'silver' | 'gold' | 'diamond';
+
+export const BOT_TIERS: readonly BotTier[] = [
+  'rookie',
+  'bronze',
+  'silver',
+  'gold',
+  'diamond',
+];
 
 interface TierConfig {
   /** [min, max] milliseconds between "thinks" before jitter is applied. */
@@ -24,34 +32,50 @@ interface TierConfig {
 }
 
 /**
- * Bot skill keyed off the *human* opponent's live trophies, not the bot
- * persona's own persisted trophies (see the module doc on `HeistBotService`).
- * Bounds are monotonic tier-over-tier by design — every field either only
- * increases or only decreases as skill goes up — which is what
- * `heist-bot.service.spec.ts` checks.
+ * Bot skill, keyed off the *human* opponent's live trophies for a ranked
+ * bot-fallback match (`startBot`), or picked explicitly for a practice match
+ * (`startPracticeBot`) — see the module doc below. Bounds are monotonic
+ * tier-over-tier by design — every field either only increases or only
+ * decreases as skill goes up — which is what `heist-bot.service.spec.ts`
+ * checks.
+ *
+ * `rookie` exists because tier alone wasn't gentle enough at the bottom: even
+ * a "weak" bot that finds an unremarkable word every few seconds still
+ * massively outpaces a genuine first-time player, who might spend a minute
+ * finding their first word at all. Rookie leans hard on *quantity* of action
+ * (a long, jittery think interval) rather than just move quality, and pairs
+ * with the mercy/backoff logic in `think()` below.
  */
 export const TIER_CONFIG: Record<BotTier, TierConfig> = {
+  rookie: {
+    thinkMs: [7000, 11000],
+    whiffChance: 0.45,
+    stealAggression: 0,
+    lengthBias: -0.6,
+    topN: 8,
+    sharpness: 0.85,
+  },
   bronze: {
-    thinkMs: [3500, 6000],
-    whiffChance: 0.2,
-    stealAggression: 0.1,
-    lengthBias: -0.4,
-    topN: 6,
-    sharpness: 0.75,
+    thinkMs: [5000, 8000],
+    whiffChance: 0.3,
+    stealAggression: 0.05,
+    lengthBias: -0.5,
+    topN: 7,
+    sharpness: 0.8,
   },
   silver: {
-    thinkMs: [2200, 4200],
-    whiffChance: 0.1,
-    stealAggression: 0.4,
-    lengthBias: -0.15,
+    thinkMs: [3000, 5000],
+    whiffChance: 0.15,
+    stealAggression: 0.3,
+    lengthBias: -0.2,
     topN: 5,
-    sharpness: 0.55,
+    sharpness: 0.6,
   },
   gold: {
-    thinkMs: [1200, 2600],
-    whiffChance: 0.04,
-    stealAggression: 0.8,
-    lengthBias: 0.15,
+    thinkMs: [1500, 3000],
+    whiffChance: 0.05,
+    stealAggression: 0.7,
+    lengthBias: 0.1,
     topN: 3,
     sharpness: 0.35,
   },
@@ -65,13 +89,26 @@ export const TIER_CONFIG: Record<BotTier, TierConfig> = {
   },
 };
 
-/** Bronze < 300, Silver 300-799, Gold 800-1499, Diamond >= 1500. */
+/** Rookie < 100, Bronze 100-399, Silver 400-899, Gold 900-1599, Diamond >= 1600. */
 export function tierFor(trophies: number): BotTier {
-  if (trophies < 300) return 'bronze';
-  if (trophies < 800) return 'silver';
-  if (trophies < 1500) return 'gold';
+  if (trophies < 100) return 'rookie';
+  if (trophies < 400) return 'bronze';
+  if (trophies < 900) return 'silver';
+  if (trophies < 1600) return 'gold';
   return 'diamond';
 }
+
+/** Tiers gentle enough to apply the struggling-human mercy/backoff below. */
+const GENTLE_TIERS: ReadonlySet<BotTier> = new Set(['rookie', 'bronze']);
+
+/**
+ * Extra multiplier on the next think delay while the human hasn't landed a
+ * single word yet — only at the gentlest tiers. A fixed think interval reads
+ * as a metronome regardless of how the actual game is going; this is the
+ * "react to how they're doing" half of the tuning, not just a slower fixed
+ * tier.
+ */
+const STRUGGLING_BACKOFF = 1.7;
 
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
@@ -87,8 +124,10 @@ function clamp01(value: number): number {
 }
 
 /**
- * Runs the "think" loop for a bot seated in a Heist room by the matchmaker's
- * fallback (see `MatchmakerService.createBotMatch`).
+ * Runs the "think" loop for a bot seated in a Heist room — either the
+ * matchmaker's ranked fallback (`startBot`, tier derived from the human's
+ * live trophies) or an explicit practice match (`startPracticeBot`, tier
+ * chosen by the player from `BOT_TIERS`).
  *
  * Knows nothing about sockets or broadcasting — `performClaim` is injected by
  * the gateway, which routes both bot and human claims through the same
@@ -101,41 +140,67 @@ function clamp01(value: number): number {
 @Injectable()
 export class HeistBotService {
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  /** roomCode -> the tier its bot is currently playing at. */
+  private readonly tiers = new Map<string, BotTier>();
 
   constructor(private readonly heist: HeistService) {}
 
-  /** Starts (or restarts) the think loop for a bot in `roomCode`. */
+  /** Starts (or restarts) a ranked-fallback bot, tier derived from the human's live trophies. */
   startBot(
     roomCode: string,
     botPlayerId: string,
     humanTrophies: number,
     performClaim: (playerId: string, word: string) => void,
   ): void {
-    this.stopBot(roomCode);
-    this.scheduleThink(roomCode, botPlayerId, humanTrophies, performClaim);
+    this.begin(roomCode, botPlayerId, tierFor(humanTrophies), performClaim);
+  }
+
+  /** Starts (or restarts) a practice bot at an explicitly chosen tier. */
+  startPracticeBot(
+    roomCode: string,
+    botPlayerId: string,
+    tier: BotTier,
+    performClaim: (playerId: string, word: string) => void,
+  ): void {
+    this.begin(roomCode, botPlayerId, tier, performClaim);
   }
 
   /** Clears any pending think for `roomCode`. Safe to call with nothing running there. */
   stopBot(roomCode: string): void {
     const timer = this.timers.get(roomCode);
-    if (!timer) return;
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     this.timers.delete(roomCode);
+    this.tiers.delete(roomCode);
   }
 
   // ── Internals ─────────────────────────────────────────────────────────────
 
+  private begin(
+    roomCode: string,
+    botPlayerId: string,
+    tier: BotTier,
+    performClaim: (playerId: string, word: string) => void,
+  ): void {
+    this.stopBot(roomCode);
+    this.tiers.set(roomCode, tier);
+    this.scheduleThink(roomCode, botPlayerId, performClaim, 1);
+  }
+
   private scheduleThink(
     roomCode: string,
     botPlayerId: string,
-    humanTrophies: number,
     performClaim: (playerId: string, word: string) => void,
+    delayMultiplier: number,
   ): void {
-    const config = TIER_CONFIG[tierFor(humanTrophies)];
-    const delay = jitter(randomBetween(config.thinkMs[0], config.thinkMs[1]));
+    const tier = this.tiers.get(roomCode);
+    if (!tier) return;
+    const config = TIER_CONFIG[tier];
+    const delay =
+      jitter(randomBetween(config.thinkMs[0], config.thinkMs[1])) *
+      delayMultiplier;
 
     const timer = setTimeout(() => {
-      this.think(roomCode, botPlayerId, humanTrophies, performClaim);
+      this.think(roomCode, botPlayerId, performClaim);
     }, delay);
     timer.unref?.();
     this.timers.set(roomCode, timer);
@@ -144,31 +209,54 @@ export class HeistBotService {
   private think(
     roomCode: string,
     botPlayerId: string,
-    humanTrophies: number,
     performClaim: (playerId: string, word: string) => void,
   ): void {
     const game = this.heist.getGame(roomCode);
-    if (!game || game.status !== 'playing') {
+    const tier = this.tiers.get(roomCode);
+    if (!game || game.status !== 'playing' || !tier) {
       this.stopBot(roomCode);
       return;
     }
 
-    const config = TIER_CONFIG[tierFor(humanTrophies)];
+    const config = TIER_CONFIG[tier];
     const candidates = this.heist.suggestClaims(roomCode, {
       playerId: botPlayerId,
     });
 
+    const gentle = GENTLE_TIERS.has(tier);
+    const humanId = gentle
+      ? (game.playerIds.find((id) => id !== botPlayerId) ?? null)
+      : null;
+    const humanWordCount = humanId
+      ? game.words.filter((w) => w.ownerId === humanId).length
+      : 0;
+
+    // Mercy: at the two gentlest tiers, never take a struggling human's last
+    // word off the board — someone who's found exactly one thing needs to
+    // keep it, not learn the steal mechanic by having it taken immediately.
+    const pool =
+      gentle && humanWordCount <= 1 && humanId
+        ? candidates.filter(
+            (c) => c.type !== 'steal' || c.target?.ownerId !== humanId,
+          )
+        : candidates;
+
     const whiffChance = clamp01(jitter(config.whiffChance));
     const word =
       Math.random() < whiffChance
-        ? this.buildWhiff(game.pool, candidates)
-        : (this.pickCandidate(candidates, config)?.word ??
-          this.buildWhiff(game.pool, candidates));
+        ? this.buildWhiff(game.pool, pool)
+        : (this.pickCandidate(pool, config)?.word ??
+          this.buildWhiff(game.pool, pool));
 
     if (word) performClaim(botPlayerId, word);
 
+    // Backoff: a human sitting on zero words gets extra breathing room at the
+    // gentlest tiers, on top of the tier's already-slow base interval.
+    const delayMultiplier =
+      gentle && humanWordCount === 0 ? STRUGGLING_BACKOFF : 1;
+
     // Reschedule regardless of hit or miss — a whiff is still a "think".
-    this.scheduleThink(roomCode, botPlayerId, humanTrophies, performClaim);
+    this.scheduleThink(roomCode, botPlayerId, performClaim, delayMultiplier);
   }
 
   /**
