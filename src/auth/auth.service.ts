@@ -1,11 +1,14 @@
 import {
+  BadRequestException,
+  ConflictException,
   Injectable,
   UnauthorizedException,
-  ConflictException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MailService } from '../mail/mail.service.js';
+import { ModerationService } from '../moderation/moderation.service.js';
+import { DISPLAY_NAME_MAX_LENGTH } from '../rooms/room.types.js';
 import type { Player } from '@prisma/client';
 
 const OTP_EXPIRY_MINUTES = 5;
@@ -19,7 +22,29 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly mail: MailService,
+    private readonly moderation: ModerationService,
   ) {}
+
+  /**
+   * No global `ValidationPipe` is registered for this app (see main.ts), so
+   * `class-validator` decorators on the DTOs are decorative only — this is
+   * the actual enforcement, same pattern as `RoomsService.validateDisplayName`.
+   */
+  private validateDisplayName(raw: string): string {
+    const name = (raw ?? '').trim().replace(/\s+/g, ' ');
+    if (!name) {
+      throw new BadRequestException('Please enter a name.');
+    }
+    if (name.length > DISPLAY_NAME_MAX_LENGTH) {
+      throw new BadRequestException(
+        `Names can be at most ${DISPLAY_NAME_MAX_LENGTH} characters.`,
+      );
+    }
+    if (this.moderation.isProfane(name)) {
+      throw new ConflictException('Please choose a different name.');
+    }
+    return name;
+  }
 
   async requestOtp(
     email: string,
@@ -90,10 +115,11 @@ export class AuthService {
     });
 
     if (!player) {
+      const chosenName = displayName?.trim() || normalized.split('@')[0];
       player = await this.prisma.player.create({
         data: {
           email: normalized,
-          displayName: displayName?.trim() || normalized.split('@')[0],
+          displayName: this.validateDisplayName(chosenName),
         },
       });
     }
@@ -133,7 +159,7 @@ export class AuthService {
   async updateProfile(playerId: string, displayName: string): Promise<Player> {
     return this.prisma.player.update({
       where: { id: playerId },
-      data: { displayName: displayName.trim() },
+      data: { displayName: this.validateDisplayName(displayName) },
     });
   }
 
