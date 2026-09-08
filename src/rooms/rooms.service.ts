@@ -103,6 +103,10 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
     /** When set, use this code instead of generating one (used by matchmaker). */
     specificCode?: string,
     mode: RoomMode = DEFAULT_ROOM_MODE,
+    /** True for a matchmaker-seeded bot opponent — see `MatchmakerService.createBotMatch`. */
+    isBot = false,
+    /** The human opponent's live trophies, for a bot's difficulty tuning — see `Player.trophies`. */
+    trophies?: number,
   ): JoinResult {
     const name = this.validateDisplayName(displayName);
     const code =
@@ -117,6 +121,8 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
       connected: true,
       disconnectedAt: null,
       team: null,
+      isBot,
+      trophies,
     };
 
     const now = Date.now();
@@ -149,6 +155,10 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
     playerId: string,
     displayName: string,
     socketId: string,
+    /** True for a matchmaker-seeded bot opponent — see `MatchmakerService.createBotMatch`. */
+    isBot = false,
+    /** The human opponent's live trophies, for a bot's difficulty tuning — see `Player.trophies`. */
+    trophies?: number,
   ): JoinResult {
     if (!isValidRoomCode(rawCode)) {
       throw new RoomError('INVALID_CODE', 'That room code doesn’t look right.');
@@ -190,6 +200,8 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
       connected: true,
       disconnectedAt: null,
       team: null,
+      isBot,
+      trophies,
     };
 
     room.players.push(player);

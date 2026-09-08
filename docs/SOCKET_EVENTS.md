@@ -30,7 +30,7 @@ game gateway. The shapes below are what the server actually emits.
 "room:player-left"   { playerId: string, temporary: boolean }
 "room:error"         { code: RoomErrorCode, message: string }
 
-type Player = { id: string, displayName: string, connected: boolean, team: number | null }
+type Player = { id: string, displayName: string, connected: boolean, team: number | null, isBot: boolean }
 
 type RoomErrorCode =
   | "ROOM_NOT_FOUND"
@@ -56,6 +56,12 @@ creator included, since the room page re-joins its own room on mount — learns 
 join order (seats 1-2 are team 0, seats 3-4 team 1) and recomputed on every join or deliberate
 leave until the game actually starts, so a pre-start leave/rejoin can't leave a room lopsided.
 Once Heist's round starts, the split is frozen for that round.
+
+**`isBot` on `Player`** is `true` only for a fallback opponent the matchmaker seated after a ranked
+queue entry waited too long for a human match (`BOT_FALLBACK_MS` in
+`backend/src/match/matchmaker.service.ts`). Bots are real `Player` rows in Postgres — same match
+history, trophies and XP path as a human — so this is purely a client-facing "this seat is a bot"
+flag, never a signal that the match doesn't count.
 
 - Room codes: **4-character** alphanumeric, uppercase, from the charset
   `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (excludes ambiguous `0/O`, `1/I`) — this is imposter's exact

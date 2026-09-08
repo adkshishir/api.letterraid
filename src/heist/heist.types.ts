@@ -209,6 +209,21 @@ export interface HeistStateView {
 
 export type ClaimType = 'pool' | 'steal';
 
+/**
+ * A ranked, legal candidate claim against a room's live pool — see
+ * `HeistService.suggestClaims`. Anything returned here is guaranteed legal by
+ * construction (built from the same `canSpell`/`remainder`/`isSuffixSteal`
+ * helpers `HeistService.claim` itself checks against), so a caller can submit
+ * `word` as-is without re-validating it.
+ */
+export interface SuggestedClaim {
+  word: string;
+  points: number;
+  type: ClaimType;
+  /** The word this would steal. Present only when `type` is `'steal'`. */
+  target?: ClaimedWord;
+}
+
 export interface ClaimOutcome {
   playerId: string;
   word: string;
