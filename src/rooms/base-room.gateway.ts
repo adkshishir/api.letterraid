@@ -32,6 +32,12 @@ interface LeavePayload {
   playerId?: unknown;
 }
 
+interface SetTeamPayload {
+  roomCode?: unknown;
+  playerId?: unknown;
+  team?: unknown;
+}
+
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
@@ -39,6 +45,11 @@ function asString(value: unknown): string {
 /** Anything but an exact `'1v1'`/`'2v2'` — including a missing field — falls back to the default. */
 function asRoomMode(value: unknown): RoomMode {
   return value === '1v1' || value === '2v2' ? value : DEFAULT_ROOM_MODE;
+}
+
+/** Anything but an exact `0`/`1` is not a valid team choice. */
+function asTeam(value: unknown): number | null {
+  return value === 0 || value === 1 ? value : null;
 }
 
 /**
@@ -123,6 +134,30 @@ export abstract class BaseRoomGateway implements OnGatewayDisconnect {
       });
 
       this.onPlayerReady(room.code, player.id);
+    } catch (err) {
+      this.emitRoomError(client, err);
+    }
+  }
+
+  @SubscribeMessage('room:set-team')
+  handleSetTeam(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: SetTeamPayload,
+  ) {
+    const roomCode = asString(data?.roomCode);
+    const playerId = asString(data?.playerId);
+    const team = asTeam(data?.team);
+    if (!roomCode || !playerId || team === null) {
+      return this.emitError(client, 'INVALID_TEAM', 'Invalid team selection.');
+    }
+
+    try {
+      const room = this.rooms.setTeam(roomCode, playerId, team);
+      // Broadcast to everyone in the room, sender included, so every screen
+      // reflects the new roster from the same source of truth.
+      this.server.to(room.code).emit('room:roster', {
+        players: toPublicRoom(room).players,
+      });
     } catch (err) {
       this.emitRoomError(client, err);
     }

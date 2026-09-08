@@ -1,4 +1,10 @@
-import { IsEmail, IsString, MinLength, MaxLength } from 'class-validator';
+import {
+  IsEmail,
+  IsString,
+  IsOptional,
+  MinLength,
+  MaxLength,
+} from 'class-validator';
 
 export class RequestOtpDto {
   @IsEmail()
@@ -14,10 +20,10 @@ export class VerifyOtpDto {
   @MaxLength(6)
   code!: string;
 
+  @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(20)
-  displayName!: string;
+  displayName?: string;
 }
 
 export class UpdateProfileDto {

@@ -39,6 +39,10 @@ model Player {
   wonMatches  Match[]    @relation("PlayerWins")
   claims      Claim[]
 
+  clanMembership      ClanMember?
+  tournamentsCreated  Tournament[]             @relation("TournamentCreator")
+  tournamentEntries   TournamentParticipant[]
+
   @@index([trophies])
   @@index([email])
 }
@@ -128,4 +132,81 @@ enum MatchStatus {
 enum ClaimType {
   POOL
   STEAL
+}
+
+// ─── CLANS ──────────────────────────────────────────────
+//
+// A player belongs to at most one clan at a time — `ClanMember.playerId` is
+// unique, so "my clan" is always a single lookup, never a list.
+
+model Clan {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  members     ClanMember[]
+  tournaments Tournament[]
+}
+
+model ClanMember {
+  id       String   @id @default(cuid())
+  clanId   String
+  playerId String   @unique
+  role     ClanRole @default(MEMBER)
+  joinedAt DateTime @default(now())
+
+  clan   Clan   @relation(fields: [clanId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([clanId])
+}
+
+enum ClanRole {
+  LEADER
+  MEMBER
+}
+
+// ─── TOURNAMENTS ────────────────────────────────────────
+//
+// "Clash Royale style": a fixed member cap and a countdown, not a bracket.
+// Anyone in it can queue for a 1v1 Heist match against another participant at
+// any point before the clock runs out; standings are ranked by league-style
+// points (win/tie/loss), not elimination. See `TournamentsService`.
+
+model Tournament {
+  id          String   @id @default(cuid())
+  /// Short shareable join code, same charset as room codes but its own space.
+  code        String   @unique
+  name        String
+  maxMembers  Int
+  durationMin Int
+  createdAt   DateTime @default(now())
+  endsAt      DateTime
+  creatorId   String
+  /// Null for a public tournament; set for one hosted by a clan for its own members.
+  clanId      String?
+
+  creator      Player                  @relation("TournamentCreator", fields: [creatorId], references: [id])
+  clan         Clan?                   @relation(fields: [clanId], references: [id], onDelete: SetNull)
+  participants TournamentParticipant[]
+
+  @@index([clanId])
+  @@index([endsAt])
+}
+
+model TournamentParticipant {
+  id           String   @id @default(cuid())
+  tournamentId String
+  playerId     String
+  wins         Int      @default(0)
+  losses       Int      @default(0)
+  /// League-style score: +3 win, +1 tie, +0 loss. The standings sort key.
+  points       Int      @default(0)
+  joinedAt     DateTime @default(now())
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  player     Player     @relation(fields: [playerId], references: [id])
+
+  @@unique([tournamentId, playerId])
+  @@index([tournamentId])
 }

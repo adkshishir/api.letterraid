@@ -114,30 +114,30 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
         ? specificCode
         : generateRoomCode((candidate) => this.rooms.has(candidate));
 
+    const now = Date.now();
+    const room: Room = {
+      code,
+      game,
+      mode,
+      players: [],
+      createdAt: now,
+      lastActivityAt: now,
+    };
+
     const player: Player = {
       id: playerId,
       displayName: name,
       socketId,
       connected: true,
       disconnectedAt: null,
-      team: null,
+      team: this.pickTeamForNewSeat(room),
       isBot,
       trophies,
     };
-
-    const now = Date.now();
-    const room: Room = {
-      code,
-      game,
-      mode,
-      players: [player],
-      createdAt: now,
-      lastActivityAt: now,
-    };
+    room.players.push(player);
 
     this.rooms.set(code, room);
     this.socketIndex.set(socketId, code);
-    this.assignTeams(room);
 
     return { room, player, reconnected: false };
   }
@@ -199,7 +199,7 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
       socketId,
       connected: true,
       disconnectedAt: null,
-      team: null,
+      team: this.pickTeamForNewSeat(room),
       isBot,
       trophies,
     };
@@ -207,9 +207,51 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
     room.players.push(player);
     room.lastActivityAt = Date.now();
     this.socketIndex.set(socketId, code);
-    this.assignTeams(room);
 
     return { room, player, reconnected: false };
+  }
+
+  /**
+   * Lets a player pick their own side of a `'2v2'` room while the lobby is
+   * still filling — a no-op error once the room has reached capacity, since
+   * that's the exact moment `HeistService.ensureGame` snapshots `team` for
+   * the round and stops looking at the live room.
+   */
+  setTeam(rawCode: string, playerId: string, team: number): Room {
+    const code = normalizeRoomCode(rawCode);
+    const room = this.rooms.get(code);
+    if (!room) {
+      throw new RoomError('ROOM_NOT_FOUND', 'No room with that code.');
+    }
+    if (room.mode !== '2v2') {
+      throw new RoomError('INVALID_TEAM', 'This room has no teams.');
+    }
+    if (team !== 0 && team !== 1) {
+      throw new RoomError('INVALID_TEAM', 'Not a valid team.');
+    }
+    if (room.players.length >= maxPlayersForMode(room.mode)) {
+      throw new RoomError(
+        'GAME_STARTED',
+        'Teams are locked in once the match starts.',
+      );
+    }
+
+    const player = room.players.find((p) => p.id === playerId);
+    if (!player) {
+      throw new RoomError('ROOM_NOT_FOUND', 'You’re not in this room.');
+    }
+    if (player.team === team) return room;
+
+    const occupants = room.players.filter(
+      (p) => p.team === team && p.id !== playerId,
+    ).length;
+    if (occupants >= 2) {
+      throw new RoomError('TEAM_FULL', 'That team is already full.');
+    }
+
+    player.team = team;
+    room.lastActivityAt = Date.now();
+    return room;
   }
 
   /** Explicit, permanent departure — frees the seat for someone else. */
@@ -227,7 +269,6 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
       this.rooms.delete(room.code);
       return null;
     }
-    this.assignTeams(room);
     return room;
   }
 
@@ -294,20 +335,16 @@ export class RoomsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Recomputes team from current join order rather than fixing it at insertion,
-   * so a pre-game leave/rejoin can't leave teams lopsided (e.g. 1 vs 3). Seats
-   * 0-1 are team 0, seats 2-3 are team 1 — this service has no idea whether a
-   * game has started, so it's safe to call on every roster change; once Heist
-   * actually starts a round it freezes its own snapshot of `team` and never
-   * reads the live room again for that round.
+   * Default team for a seat about to be added, computed from the room as it
+   * stands *before* that seat joins — fills team 0 first, then team 1, so the
+   * ordinary case (four friends joining one after another) pairs the first
+   * two arrivals together exactly like the old fixed by-seat assignment did.
+   * A player can move themselves afterward with `setTeam` while the lobby is
+   * still filling; this just picks a sane starting point so nobody has to.
    */
-  private assignTeams(room: Room): void {
-    if (room.mode !== '2v2') {
-      for (const player of room.players) player.team = null;
-      return;
-    }
-    room.players.forEach((player, index) => {
-      player.team = index < 2 ? 0 : 1;
-    });
+  private pickTeamForNewSeat(room: Room): number | null {
+    if (room.mode !== '2v2') return null;
+    const teamZeroCount = room.players.filter((p) => p.team === 0).length;
+    return teamZeroCount < 2 ? 0 : 1;
   }
 }

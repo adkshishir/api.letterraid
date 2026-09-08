@@ -13,6 +13,7 @@ import { HeistService } from './heist.service';
 import { HeistResultsService } from './heist-results.service';
 import { HeistBotService } from './heist-bot.service';
 import { HeistError, ROUND_DURATION_MS } from './heist.types';
+import { TournamentsService } from '../tournaments/tournaments.service';
 
 const asString = (v: unknown) => (typeof v === 'string' ? v : '');
 
@@ -47,6 +48,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     private readonly heist: HeistService,
     private readonly results: HeistResultsService,
     private readonly bot: HeistBotService,
+    private readonly tournaments: TournamentsService,
   ) {
     super(rooms);
   }
@@ -204,6 +206,10 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
 
     const result = this.heist.finish(roomCode);
     if (!result) return;
+
+    // No-op for every room that isn't a tournament match — see
+    // `TournamentsService.recordResult`.
+    this.tournaments.recordResult(roomCode, result);
 
     const trophyDeltas = await this.results.finishMatch(roomCode, result);
 

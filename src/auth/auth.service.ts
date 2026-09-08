@@ -21,7 +21,9 @@ export class AuthService {
     private readonly mail: MailService,
   ) {}
 
-  async requestOtp(email: string): Promise<{ message: string }> {
+  async requestOtp(
+    email: string,
+  ): Promise<{ message: string; isNewPlayer: boolean }> {
     const normalized = email.toLowerCase().trim();
 
     // Rate limit: max 3 OTP requests per email per 10 minutes
@@ -45,13 +47,18 @@ export class AuthService {
 
     await this.mail.sendOtp(normalized, code);
 
-    return { message: 'OTP sent to your email' };
+    const existing = await this.prisma.player.findUnique({
+      where: { email: normalized },
+      select: { id: true },
+    });
+
+    return { message: 'OTP sent to your email', isNewPlayer: !existing };
   }
 
   async verifyOtp(
     email: string,
     code: string,
-    displayName: string,
+    displayName?: string,
   ): Promise<{ token: string; player: Player }> {
     const normalized = email.toLowerCase().trim();
 
@@ -75,7 +82,9 @@ export class AuthService {
       data: { used: true },
     });
 
-    // Find or create player
+    // Find or create player. displayName is set once at registration and
+    // is never overwritten on subsequent logins — changing it later is a
+    // deliberate profile edit (see updateProfile), not a login side effect.
     let player = await this.prisma.player.findUnique({
       where: { email: normalized },
     });
@@ -84,16 +93,8 @@ export class AuthService {
       player = await this.prisma.player.create({
         data: {
           email: normalized,
-          displayName: displayName.trim() || normalized.split('@')[0],
+          displayName: displayName?.trim() || normalized.split('@')[0],
         },
-      });
-    } else if (
-      displayName.trim() &&
-      displayName.trim() !== player.displayName
-    ) {
-      player = await this.prisma.player.update({
-        where: { id: player.id },
-        data: { displayName: displayName.trim() },
       });
     }
 

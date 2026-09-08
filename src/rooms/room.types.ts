@@ -32,7 +32,10 @@ export type RoomErrorCode =
   | 'ROOM_FULL'
   | 'INVALID_NAME'
   | 'INVALID_CODE'
-  | 'PROFANITY_REJECTED';
+  | 'PROFANITY_REJECTED'
+  | 'INVALID_TEAM'
+  | 'TEAM_FULL'
+  | 'GAME_STARTED';
 
 export class RoomError extends Error {
   constructor(

@@ -7,6 +7,8 @@ import { PrismaModule } from './prisma/prisma.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { MatchModule } from './match/match.module.js';
 import { LeaderboardModule } from './leaderboard/leaderboard.module.js';
+import { ClansModule } from './clans/clans.module.js';
+import { TournamentsModule } from './tournaments/tournaments.module.js';
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { LeaderboardModule } from './leaderboard/leaderboard.module.js';
     AuthModule,
     MatchModule,
     LeaderboardModule,
+    ClansModule,
+    TournamentsModule,
     HeistModule,
   ],
 })

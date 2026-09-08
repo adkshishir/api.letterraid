@@ -15,6 +15,27 @@ the same way 1v1 already does), while §1 below is still-undone, open-ended N-pl
 with a genuinely unsolved steal-resolution question. Don't read Squads as a stepping stone toward
 it; they're separate designs.
 
+**Clans and Tournaments shipped 2026-09-08.** Two new domains, `backend/src/clans/` and
+`backend/src/tournaments/`:
+
+- **Clans** are persistent groups (`Clan`/`ClanMember` — a player belongs to at most one at a
+  time). A clan has a roster ranked by member trophies, a leader (auto-succeeded to the
+  earliest-joined remaining member on leave, or the clan is deleted if they were the last one),
+  and can host tournaments visible only to its own members.
+- **Tournaments** are Clash-Royale-style, not brackets: a creator picks a member cap (10/50/100)
+  and a duration (30/60/120 min) from a fixed menu, `TournamentsService` derives `OPEN`/`COMPLETE`
+  from `endsAt` rather than a background job, and any participant can queue for a 1v1 Heist match
+  against another participant at any point before time runs out — no elimination. Standings are
+  league-style points (win 3 / tie 1 / loss 0), tracked in `TournamentParticipant` completely
+  independent of `HeistResultsService`: a tournament match is an ordinary two-real-player Heist
+  room from the ranked pipeline's point of view (trophies/XP update exactly like any other match,
+  same as a private "play with friends" room already did), and `TournamentsService.recordResult`
+  is a no-op hook `HeistGateway` calls for every room, not just tournament ones.
+
+Frontend: `/clan` gained a Clan/Friends tab split (Clan hub is new; Friends is the pre-existing
+private-room flow, now using the account's login name automatically instead of asking for one);
+`/tournament` and the new `/tournament/[code]` are fully rebuilt from the old placeholder.
+
 ## Why this project exists
 
 Heist is the mode playtesters kept asking for by name, and the reasons are what every idea here

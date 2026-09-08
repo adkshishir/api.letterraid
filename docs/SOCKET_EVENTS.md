@@ -21,12 +21,14 @@ game gateway. The shapes below are what the server actually emits.
 // Client -> Server
 "room:create"   { playerId: string, displayName: string, mode?: "1v1" | "2v2" }
 "room:join"     { playerId: string, roomCode: string, displayName: string }
+"room:set-team" { playerId: string, roomCode: string, team: 0 | 1 }   // "2v2" only, lobby only
 "room:leave"    { playerId: string, roomCode: string }
 
 // Server -> Client
 "room:created"       { roomCode: string, players: Player[], mode: "1v1" | "2v2" }
 "room:joined"        { roomCode: string, players: Player[], reconnected: boolean, mode: "1v1" | "2v2" } // to the joiner
 "room:player-joined" { player: Player, reconnected: boolean }   // to the other player only
+"room:roster"        { players: Player[] }   // broadcast to the whole room after a team change
 "room:player-left"   { playerId: string, temporary: boolean }
 "room:error"         { code: RoomErrorCode, message: string }
 
@@ -38,6 +40,9 @@ type RoomErrorCode =
   | "INVALID_NAME"
   | "INVALID_CODE"        // malformed code, rejected before lookup
   | "PROFANITY_REJECTED"
+  | "INVALID_TEAM"        // not "2v2", or not exactly 0/1
+  | "TEAM_FULL"           // the requested team already has 2 players
+  | "GAME_STARTED"        // room already reached capacity; teams are frozen
 ```
 
 `playerId` is the client's persisted localStorage UUID and is required on every room event — it's
@@ -52,10 +57,12 @@ and defaults to `"1v1"`; any value other than exactly `"1v1"`/`"2v2"` (including
 falls back to the default too. `mode` on `room:created`/`room:joined` is how every client — the
 creator included, since the room page re-joins its own room on mount — learns which one a room is.
 
-**`team` on `Player`** is `0` or `1` in a `"2v2"` room, always `null` in `"1v1"`. It's assigned by
-join order (seats 1-2 are team 0, seats 3-4 team 1) and recomputed on every join or deliberate
-leave until the game actually starts, so a pre-start leave/rejoin can't leave a room lopsided.
-Once Heist's round starts, the split is frozen for that round.
+**`team` on `Player`** is `0` or `1` in a `"2v2"` room, always `null` in `"1v1"`. On join it
+defaults to whichever team has room, filling team 0 first — so the ordinary case (people joining
+one after another) pairs the first two arrivals together. A player can move themselves with
+`room:set-team` at any point while the lobby is still filling; a leave never reassigns anyone
+else's team. Once the room reaches capacity and Heist's round starts, `team` is frozen for that
+round and `room:set-team` starts rejecting with `GAME_STARTED`.
 
 **`isBot` on `Player`** is `true` only for a fallback opponent the matchmaker seated after a ranked
 queue entry waited too long for a human match (`BOT_FALLBACK_MS` in

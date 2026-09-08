@@ -297,20 +297,78 @@ describe('RoomsService', () => {
       expect(room.players.map((p) => p.team)).toEqual([0, 0, 1, 1]);
     });
 
-    it('recomputes on a pre-game leave so a later rejoin can’t leave teams lopsided', () => {
+    it('leaves remaining players’ teams untouched on a pre-game leave, and balances the newcomer', () => {
       const { room } = createSquad();
       service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
       service.joinRoom(room.code, 'player-c', 'Cal', 'socket-c');
       service.joinRoom(room.code, 'player-d', 'Deb', 'socket-d');
 
-      // Ana (seat 0) leaves before the round starts.
+      // Ana (team 0) leaves before the round starts — Ben keeps his team
+      // rather than being reshuffled onto whatever a recompute would pick.
       service.leaveRoom(room.code, 'player-a');
-      expect(room.players.map((p) => p.team)).toEqual([0, 0, 1]);
+      expect(
+        room.players.map((p) => [p.id, p.team]),
+      ).toEqual([
+        ['player-b', 0],
+        ['player-c', 1],
+        ['player-d', 1],
+      ]);
 
-      // A new player fills the empty seat — team is recomputed fresh from the
-      // current roster rather than staying stuck 1-vs-3.
+      // A new player fills the vacated slot on team 0 rather than staying
+      // stuck 1-vs-2 or piling onto the already-full team 1.
       service.joinRoom(room.code, 'player-e', 'Eli', 'socket-e');
-      expect(room.players.map((p) => p.team)).toEqual([0, 0, 1, 1]);
+      expect(
+        room.players.find((p) => p.id === 'player-e')?.team,
+      ).toBe(0);
+    });
+
+    it('lets a player pick their own team while the lobby is still filling', () => {
+      const { room } = createSquad();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      // Ana and Ben both default onto team 0 — Ben moves himself to the
+      // empty team 1 rather than staying paired with Ana.
+      expect(room.players.map((p) => p.team)).toEqual([0, 0]);
+      const updated = service.setTeam(room.code, 'player-b', 1);
+      expect(
+        updated.players.find((p) => p.id === 'player-b')?.team,
+      ).toBe(1);
+    });
+
+    it('rejects setTeam once a team already has two players', () => {
+      const { room } = createSquad();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      service.joinRoom(room.code, 'player-c', 'Cal', 'socket-c');
+      // Team 0 already has Ana and Ben.
+      try {
+        service.setTeam(room.code, 'player-c', 0);
+        throw new Error('expected a RoomError');
+      } catch (err) {
+        expect((err as RoomError).code).toBe('TEAM_FULL');
+      }
+    });
+
+    it('rejects setTeam once the room is full and the round has started', () => {
+      const { room } = createSquad();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      service.joinRoom(room.code, 'player-c', 'Cal', 'socket-c');
+      service.joinRoom(room.code, 'player-d', 'Deb', 'socket-d');
+      try {
+        service.setTeam(room.code, 'player-d', 0);
+        throw new Error('expected a RoomError');
+      } catch (err) {
+        expect((err as RoomError).code).toBe('GAME_STARTED');
+      }
+    });
+
+    it('rejects setTeam in a 1v1 room', () => {
+      const { room } = create();
+      service.joinRoom(room.code, 'player-b', 'Ben', 'socket-b');
+      try {
+        service.setTeam(room.code, 'player-a', 0);
+        throw new Error('expected a RoomError');
+      } catch (err) {
+        expect((err as RoomError).code).toBe('INVALID_TEAM');
+      }
     });
 
     it('leaves a reconnecting player’s team alone rather than reassigning it', () => {
