@@ -181,7 +181,12 @@ model Tournament {
   maxMembers  Int
   durationMin Int
   createdAt   DateTime @default(now())
-  endsAt      DateTime
+  /// Set by the host's `POST /tournaments/:id/start`; null means the
+  /// tournament is still a lobby (players can join, but not queue for
+  /// matches). Duration counts down from here, not from `createdAt`.
+  startedAt   DateTime?
+  /// Null while in the lobby (not yet started); set to `startedAt + durationMin` on start.
+  endsAt      DateTime?
   creatorId   String
   /// Null for a public tournament; set for one hosted by a clan for its own members.
   clanId      String?
@@ -209,4 +214,19 @@ model TournamentParticipant {
 
   @@unique([tournamentId, playerId])
   @@index([tournamentId])
+}
+
+/// Self-tuning knob per bot tier (see BotTier in heist-bot.service.ts). Starts
+/// at multiplier 1.0 (today's hand-tuned TIER_CONFIG baseline) and nudges
+/// after every ranked bot-fallback match toward each tier's target human word
+/// share, so a tier that's still crushing humans gets slower/miss-happier on
+/// its own without another manual retune. Practice matches (explicit tier
+/// choice) don't feed this — see BotDifficultyService.
+model BotDifficultyState {
+  tier            String   @id
+  thinkMultiplier Float    @default(1)
+  whiffMultiplier Float    @default(1)
+  matchesSeen     Int      @default(0)
+  lastHumanShare  Float?
+  updatedAt       DateTime @updatedAt
 }

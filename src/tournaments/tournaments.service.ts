@@ -123,7 +123,6 @@ export class TournamentsService {
     }
 
     const code = await this.generateCode();
-    const endsAt = new Date(Date.now() + durationMin * 60_000);
 
     const tournament = await this.prisma.tournament.create({
       data: {
@@ -131,7 +130,9 @@ export class TournamentsService {
         name,
         maxMembers,
         durationMin,
-        endsAt,
+        // Lobby until the host explicitly starts it — see `start()`.
+        startedAt: null,
+        endsAt: null,
         creatorId: creator.id,
         clanId: input.clanId ?? null,
       },
@@ -147,7 +148,7 @@ export class TournamentsService {
   async join(idOrCode: string, player: { id: string }): Promise<TournamentDetail> {
     const tournament = await this.findRaw(idOrCode);
     if (!tournament) throw new NotFoundException('No tournament with that code.');
-    if (deriveStatus(tournament.endsAt) === 'COMPLETE') {
+    if (deriveStatus(tournament.startedAt, tournament.endsAt) === 'COMPLETE') {
       throw new ConflictException('This tournament has already ended.');
     }
     if (tournament.clanId) {
@@ -170,6 +171,38 @@ export class TournamentsService {
     }
 
     return this.getDetail(tournament.id, player.id);
+  }
+
+  /**
+   * Host-only: moves the tournament out of the lobby and starts the
+   * duration countdown from now. Requires at least 2 joined participants —
+   * matchmaking needs a pair.
+   */
+  async start(idOrCode: string, requesterId: string): Promise<TournamentDetail> {
+    const tournament = await this.findRaw(idOrCode);
+    if (!tournament) throw new NotFoundException('No tournament with that code.');
+    if (tournament.creatorId !== requesterId) {
+      throw new ForbiddenException('Only the host can start this tournament.');
+    }
+    if (tournament.startedAt) {
+      throw new ConflictException('This tournament has already started.');
+    }
+
+    const count = await this.prisma.tournamentParticipant.count({
+      where: { tournamentId: tournament.id },
+    });
+    if (count < 2) {
+      throw new BadRequestException('Need at least 2 players joined to start.');
+    }
+
+    const startedAt = new Date();
+    const endsAt = new Date(startedAt.getTime() + tournament.durationMin * 60_000);
+    await this.prisma.tournament.update({
+      where: { id: tournament.id },
+      data: { startedAt, endsAt },
+    });
+
+    return this.getDetail(tournament.id, requesterId);
   }
 
   private async requireClanMember(clanId: string, playerId: string): Promise<void> {
@@ -216,8 +249,9 @@ export class TournamentsService {
       maxMembers: tournament.maxMembers,
       durationMin: tournament.durationMin,
       memberCount: tournament.participants.length,
-      endsAt: tournament.endsAt.toISOString(),
-      status: deriveStatus(tournament.endsAt),
+      startedAt: tournament.startedAt?.toISOString() ?? null,
+      endsAt: tournament.endsAt?.toISOString() ?? null,
+      status: deriveStatus(tournament.startedAt, tournament.endsAt),
       clanId: tournament.clanId,
       createdAt: tournament.createdAt.toISOString(),
       creatorId: tournament.creatorId,
@@ -232,7 +266,10 @@ export class TournamentsService {
   /** Open, public (non-clan) tournaments still worth browsing into. */
   async listOpen(limit = 20): Promise<TournamentSummary[]> {
     const candidates = await this.prisma.tournament.findMany({
-      where: { clanId: null, endsAt: { gt: new Date() } },
+      where: {
+        clanId: null,
+        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }],
+      },
       orderBy: { createdAt: 'desc' },
       take: 50,
       include: { _count: { select: { participants: true } } },
@@ -264,7 +301,16 @@ export class TournamentsService {
   }
 
   private toSummary(
-    t: { id: string; code: string; name: string; maxMembers: number; durationMin: number; endsAt: Date; clanId: string | null },
+    t: {
+      id: string;
+      code: string;
+      name: string;
+      maxMembers: number;
+      durationMin: number;
+      startedAt: Date | null;
+      endsAt: Date | null;
+      clanId: string | null;
+    },
     memberCount: number,
   ): TournamentSummary {
     return {
@@ -274,8 +320,9 @@ export class TournamentsService {
       maxMembers: t.maxMembers,
       durationMin: t.durationMin,
       memberCount,
-      endsAt: t.endsAt.toISOString(),
-      status: deriveStatus(t.endsAt),
+      startedAt: t.startedAt?.toISOString() ?? null,
+      endsAt: t.endsAt?.toISOString() ?? null,
+      status: deriveStatus(t.startedAt, t.endsAt),
       clanId: t.clanId,
     };
   }
@@ -285,7 +332,11 @@ export class TournamentsService {
   async enqueue(idOrCode: string, player: { id: string; displayName: string }): Promise<{ queued: boolean; queueSize: number }> {
     const tournament = await this.findRaw(idOrCode);
     if (!tournament) throw new NotFoundException('No tournament with that code.');
-    if (deriveStatus(tournament.endsAt) === 'COMPLETE') {
+    const status = deriveStatus(tournament.startedAt, tournament.endsAt);
+    if (status === 'LOBBY') {
+      throw new ConflictException('The host hasn’t started this tournament yet.');
+    }
+    if (status === 'COMPLETE') {
       throw new ConflictException('This tournament has already ended.');
     }
     const participant = await this.prisma.tournamentParticipant.findUnique({

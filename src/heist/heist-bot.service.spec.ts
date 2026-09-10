@@ -1,5 +1,13 @@
 import { HeistService } from './heist.service';
 import { HeistBotService, TIER_CONFIG, tierFor } from './heist-bot.service';
+import { BotDifficultyService } from './bot-difficulty.service';
+
+/** Every tier's multiplier pinned at the TIER_CONFIG baseline (1.0) — these tests exercise TIER_CONFIG itself, not the self-tuning loop. */
+const neutralDifficulty = () =>
+  ({
+    getMultipliers: () => ({ thinkMultiplier: 1, whiffMultiplier: 1 }),
+    recordMatchOutcome: jest.fn().mockResolvedValue(undefined),
+  }) as unknown as BotDifficultyService;
 
 const TIERS_BY_SKILL = ['rookie', 'bronze', 'silver', 'gold', 'diamond'] as const;
 
@@ -107,7 +115,7 @@ describe('HeistBotService', () => {
   beforeEach(() => {
     jest.useFakeTimers();
     heist = new HeistService();
-    bot = new HeistBotService(heist);
+    bot = new HeistBotService(heist, neutralDifficulty());
     heist.ensureGame(ROOM, [
       { id: HUMAN, team: null },
       { id: BOT_ID, team: null },

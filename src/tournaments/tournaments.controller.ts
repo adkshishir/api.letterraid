@@ -84,6 +84,22 @@ export class TournamentsController {
     return this.tournaments.getDetail(idOrCode, req.player.id);
   }
 
+  @Post(':idOrCode/start')
+  @ApiOperation({
+    summary: 'Host starts the tournament, ending the lobby',
+    description:
+      'Only the creator can call this. Moves the tournament from LOBBY to ' +
+      'OPEN and starts the duration countdown from now — the host doesn’t ' +
+      'need to wait for the member cap to fill. Requires at least 2 joined ' +
+      'participants.',
+  })
+  start(
+    @Param('idOrCode') idOrCode: string,
+    @Req() req: PlayerReq,
+  ): Promise<TournamentDetail> {
+    return this.tournaments.start(idOrCode, req.player.id);
+  }
+
   @Post(':idOrCode/join')
   @ApiOperation({ summary: 'Join a tournament (by id or join code)' })
   join(

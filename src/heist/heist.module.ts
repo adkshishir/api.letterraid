@@ -6,6 +6,7 @@ import { HeistGateway } from './heist.gateway';
 import { HeistService } from './heist.service';
 import { HeistResultsService } from './heist-results.service';
 import { HeistBotService } from './heist-bot.service';
+import { BotDifficultyService } from './bot-difficulty.service';
 import { PracticeService } from './practice.service';
 import { PracticeController } from './practice.controller';
 
@@ -17,6 +18,7 @@ import { PracticeController } from './practice.controller';
     HeistService,
     HeistResultsService,
     HeistBotService,
+    BotDifficultyService,
     PracticeService,
   ],
 })

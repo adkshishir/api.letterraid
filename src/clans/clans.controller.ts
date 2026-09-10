@@ -13,7 +13,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ClansService } from './clans.service.js';
 import { CreateClanDto } from './clan.dto.js';
 import { ClanDetail, ClanSummary } from './clan.types.js';
-import { JwtAuthGuard } from '../auth/auth.guard.js';
+import { JwtAuthGuard, OptionalJwtAuthGuard } from '../auth/auth.guard.js';
 
 @ApiTags('clans')
 @Controller('clans')
@@ -42,6 +42,7 @@ export class ClansController {
   }
 
   @Get(':id')
+  @UseGuards(OptionalJwtAuthGuard)
   @ApiOperation({
     summary: 'Clan detail and roster',
     description:

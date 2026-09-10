@@ -2,7 +2,19 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { ClaimOutcome, HeistResult } from './heist.types';
 
-const K_FACTOR = 32;
+/**
+ * Fixed-delta trophy system (replaced the old Elo K-factor formula): a plain
+ * win is worth +30 for the winner and -30 for the loser. Once the gap
+ * between the two players' trophies passes `UPSET_GAP_THRESHOLD`, the result
+ * either confirmed the favorite (softened to -29 for the loser, who was the
+ * underdog) or was an upset (bumped to +31 for the winner, who was the
+ * underdog) — see `trophyDeltas` below.
+ */
+const TROPHY_WIN = 30;
+const TROPHY_LOSS = 30;
+const UPSET_GAP_THRESHOLD = 10;
+const FAVORITE_WIN_MERCY = 1;
+const UNDERDOG_WIN_BONUS = 1;
 const XP_PER_GAME = 20;
 const XP_WIN_BONUS = 30;
 const XP_PER_LEVEL = 500;
@@ -128,16 +140,10 @@ export class HeistResultsService {
       ]);
       if (!playerA || !playerB) return null;
 
-      const deltaA = this.trophyDelta(
+      const { deltaA, deltaB } = this.trophyDeltas(
+        playerA.id,
         playerA.trophies,
         playerB.trophies,
-        a,
-        result,
-      );
-      const deltaB = this.trophyDelta(
-        playerB.trophies,
-        playerA.trophies,
-        b,
         result,
       );
 
@@ -164,24 +170,37 @@ export class HeistResultsService {
 
   // ── Scoring ─────────────────────────────────────────────────────────────
 
-  private actualScore(
-    playerId: string,
+  /**
+   * A tie moves nothing. Otherwise: flat +30/-30, softened to -29 for the
+   * loser when the winner was already more than `UPSET_GAP_THRESHOLD`
+   * trophies ahead (expected result, easy on the underdog loser), or bumped
+   * to +31 for the winner when they were the one more than
+   * `UPSET_GAP_THRESHOLD` trophies behind (upset, rewarded).
+   */
+  private trophyDeltas(
+    playerAId: string,
+    trophiesA: number,
+    trophiesB: number,
     result: Pick<HeistResult, 'winnerId' | 'tied'>,
-  ): number {
-    if (result.tied) return 0.5;
-    return result.winnerId === playerId ? 1 : 0;
-  }
+  ): { deltaA: number; deltaB: number } {
+    if (result.tied) return { deltaA: 0, deltaB: 0 };
 
-  /** Standard Elo expectation + K-factor delta, so an upset moves trophies more than a expected win. */
-  private trophyDelta(
-    ownTrophies: number,
-    opponentTrophies: number,
-    own: { playerId: string },
-    result: HeistResult,
-  ): number {
-    const expected = 1 / (1 + 10 ** ((opponentTrophies - ownTrophies) / 400));
-    const actual = this.actualScore(own.playerId, result);
-    return Math.round(K_FACTOR * (actual - expected));
+    const aWon = result.winnerId === playerAId;
+    const winnerTrophies = aWon ? trophiesA : trophiesB;
+    const loserTrophies = aWon ? trophiesB : trophiesA;
+    const gap = winnerTrophies - loserTrophies;
+
+    let winnerDelta = TROPHY_WIN;
+    let loserDelta = -TROPHY_LOSS;
+    if (gap > UPSET_GAP_THRESHOLD) {
+      loserDelta = -(TROPHY_LOSS - FAVORITE_WIN_MERCY);
+    } else if (gap < -UPSET_GAP_THRESHOLD) {
+      winnerDelta = TROPHY_WIN + UNDERDOG_WIN_BONUS;
+    }
+
+    return aWon
+      ? { deltaA: winnerDelta, deltaB: loserDelta }
+      : { deltaA: loserDelta, deltaB: winnerDelta };
   }
 
   private async applyResult(

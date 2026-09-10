@@ -9,7 +9,7 @@ export type TournamentDurationMin = (typeof TOURNAMENT_DURATIONS_MIN)[number];
 
 export const TOURNAMENT_NAME_MAX_LENGTH = 40;
 
-export type TournamentStatus = 'OPEN' | 'COMPLETE';
+export type TournamentStatus = 'LOBBY' | 'OPEN' | 'COMPLETE';
 
 export class TournamentStanding {
   @ApiProperty() playerId!: string;
@@ -27,8 +27,19 @@ export class TournamentSummary {
   @ApiProperty({ enum: TOURNAMENT_SIZES }) maxMembers!: number;
   @ApiProperty({ enum: TOURNAMENT_DURATIONS_MIN }) durationMin!: number;
   @ApiProperty() memberCount!: number;
-  @ApiProperty() endsAt!: string;
-  @ApiProperty({ enum: ['OPEN', 'COMPLETE'] }) status!: TournamentStatus;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: 'Null while the tournament is still a lobby (not yet started).',
+  })
+  startedAt!: string | null;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: 'Null while the tournament is still a lobby (not yet started).',
+  })
+  endsAt!: string | null;
+  @ApiProperty({ enum: ['LOBBY', 'OPEN', 'COMPLETE'] }) status!: TournamentStatus;
   @ApiProperty({
     nullable: true,
     type: String,
@@ -45,6 +56,17 @@ export class TournamentDetail extends TournamentSummary {
   @ApiProperty({ type: [TournamentStanding] }) standings!: TournamentStanding[];
 }
 
-export function deriveStatus(endsAt: Date, now = new Date()): TournamentStatus {
+/**
+ * LOBBY until the host starts it (`startedAt`/`endsAt` both null) — players
+ * can join but not queue for matches. Then OPEN until `endsAt`, then
+ * COMPLETE. There's no stored status column; it's always derived so there's
+ * no background sweep job for either transition.
+ */
+export function deriveStatus(
+  startedAt: Date | null,
+  endsAt: Date | null,
+  now = new Date(),
+): TournamentStatus {
+  if (!startedAt || !endsAt) return 'LOBBY';
   return now >= endsAt ? 'COMPLETE' : 'OPEN';
 }

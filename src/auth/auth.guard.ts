@@ -26,3 +26,28 @@ export class JwtAuthGuard implements CanActivate {
     return true;
   }
 }
+
+/**
+ * For routes that are public but want `req.player` when the caller happens
+ * to be signed in (e.g. `GET /clans/:id`'s `myRole`) — unlike `JwtAuthGuard`,
+ * a missing or invalid token never blocks the request; it just leaves
+ * `req.player` unset.
+ */
+@Injectable()
+export class OptionalJwtAuthGuard implements CanActivate {
+  constructor(private readonly authService: AuthService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    const authHeader = request.headers?.authorization;
+
+    if (authHeader?.startsWith('Bearer ')) {
+      try {
+        request.player = await this.authService.validateToken(authHeader.slice(7));
+      } catch {
+        // Invalid/expired token on a public route — proceed unauthenticated.
+      }
+    }
+    return true;
+  }
+}

@@ -11,8 +11,9 @@ import { RoomsService } from '../rooms/rooms.service';
 import { GameId, maxPlayersForMode } from '../rooms/room.types';
 import { HeistService } from './heist.service';
 import { HeistResultsService } from './heist-results.service';
-import { HeistBotService } from './heist-bot.service';
-import { HeistError, ROUND_DURATION_MS } from './heist.types';
+import { HeistBotService, BotTier } from './heist-bot.service';
+import { BotDifficultyService } from './bot-difficulty.service';
+import { HeistError, HeistResult, ROUND_DURATION_MS } from './heist.types';
 import { TournamentsService } from '../tournaments/tournaments.service';
 import { PracticeService } from './practice.service';
 
@@ -49,6 +50,7 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     private readonly heist: HeistService,
     private readonly results: HeistResultsService,
     private readonly bot: HeistBotService,
+    private readonly botDifficulty: BotDifficultyService,
     private readonly tournaments: TournamentsService,
     private readonly practice: PracticeService,
   ) {
@@ -207,6 +209,9 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
   }
 
   private async endRound(roomCode: string) {
+    // Read before `stopBot` clears it — needed below to feed the ranked
+    // match's outcome back into `BotDifficultyService`.
+    const botTier = this.bot.tierOf(roomCode);
     this.bot.stopBot(roomCode);
     this.stopClocks(roomCode);
 
@@ -217,10 +222,16 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     // `TournamentsService.recordResult`.
     this.tournaments.recordResult(roomCode, result);
 
+    const isPractice = this.practice.isPractice(roomCode);
+
     // Practice rooms never touch the ranked pipeline — see `PracticeService`.
-    const trophyDeltas = this.practice.isPractice(roomCode)
+    const trophyDeltas = isPractice
       ? null
       : await this.results.finishMatch(roomCode, result);
+
+    // Ranked bot-fallback match only — see the doc comment on
+    // `BotDifficultyService` for why practice matches don't feed this.
+    if (!isPractice && botTier) this.recordBotOutcome(roomCode, botTier, result);
 
     this.emitToRoom(roomCode, 'heist:game-over', {
       scores: result.scores,
@@ -231,6 +242,28 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
       trophyDeltas,
     });
     this.pushState(roomCode);
+  }
+
+  /** Feeds a finished ranked bot-fallback match's word split back into `BotDifficultyService`. */
+  private recordBotOutcome(
+    roomCode: string,
+    tier: BotTier,
+    result: HeistResult,
+  ): void {
+    const room = this.rooms.getRoom(roomCode);
+    const botPlayer = room?.players.find((p) => p.isBot);
+    if (!botPlayer) return;
+
+    const botScore = result.scores.find((s) => s.playerId === botPlayer.id);
+    const humanScore = result.scores.find((s) => s.playerId !== botPlayer.id);
+    if (!botScore || !humanScore) return;
+
+    this.botDifficulty
+      .recordMatchOutcome(tier, humanScore.words, botScore.words)
+      .catch(() => {
+        // Best-effort — a failed write just means this tier's multiplier
+        // doesn't move for one match, not a gameplay-visible error.
+      });
   }
 
   // ── Bot ───────────────────────────────────────────────────────────────────

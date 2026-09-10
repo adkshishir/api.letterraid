@@ -4,6 +4,7 @@ import { HeistGateway } from './heist.gateway';
 import { HeistService } from './heist.service';
 import { HeistResultsService } from './heist-results.service';
 import { HeistBotService } from './heist-bot.service';
+import { BotDifficultyService } from './bot-difficulty.service';
 import { TournamentsService } from '../tournaments/tournaments.service';
 import { PracticeService } from './practice.service';
 
@@ -29,7 +30,11 @@ describe('HeistGateway', () => {
       discard: jest.fn(),
     } as unknown as HeistResultsService;
 
-    const bot = new HeistBotService(heist);
+    const botDifficulty = {
+      getMultipliers: () => ({ thinkMultiplier: 1, whiffMultiplier: 1 }),
+      recordMatchOutcome: jest.fn().mockResolvedValue(undefined),
+    } as unknown as BotDifficultyService;
+    const bot = new HeistBotService(heist, botDifficulty);
 
     const tournaments = {
       recordResult: jest.fn(),
@@ -41,7 +46,15 @@ describe('HeistGateway', () => {
       clear: jest.fn(),
     } as unknown as PracticeService;
 
-    gateway = new HeistGateway(rooms, heist, results, bot, tournaments, practice);
+    gateway = new HeistGateway(
+      rooms,
+      heist,
+      results,
+      bot,
+      botDifficulty,
+      tournaments,
+      practice,
+    );
     // Broadcasts only fire once a game actually starts and pushes state; a
     // stub is enough since these tests never assert on socket traffic.
     (gateway as unknown as { server: unknown }).server = {

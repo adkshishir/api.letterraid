@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { HeistService } from './heist.service';
 import { MIN_WORD_LENGTH, SuggestedClaim } from './heist.types';
+import { BotDifficultyService } from './bot-difficulty.service';
 
 export type BotTier = 'rookie' | 'bronze' | 'silver' | 'gold' | 'diamond';
 
@@ -48,32 +49,32 @@ interface TierConfig {
  */
 export const TIER_CONFIG: Record<BotTier, TierConfig> = {
   rookie: {
-    thinkMs: [7000, 11000],
-    whiffChance: 0.45,
+    thinkMs: [9000, 14000],
+    whiffChance: 0.55,
     stealAggression: 0,
     lengthBias: -0.6,
     topN: 8,
     sharpness: 0.85,
   },
   bronze: {
-    thinkMs: [5000, 8000],
-    whiffChance: 0.3,
-    stealAggression: 0.05,
+    thinkMs: [7000, 11000],
+    whiffChance: 0.4,
+    stealAggression: 0.02,
     lengthBias: -0.5,
     topN: 7,
     sharpness: 0.8,
   },
   silver: {
-    thinkMs: [3000, 5000],
-    whiffChance: 0.15,
-    stealAggression: 0.3,
+    thinkMs: [4000, 6500],
+    whiffChance: 0.25,
+    stealAggression: 0.2,
     lengthBias: -0.2,
     topN: 5,
     sharpness: 0.6,
   },
   gold: {
-    thinkMs: [1500, 3000],
-    whiffChance: 0.05,
+    thinkMs: [1800, 3400],
+    whiffChance: 0.08,
     stealAggression: 0.7,
     lengthBias: 0.1,
     topN: 3,
@@ -99,7 +100,20 @@ export function tierFor(trophies: number): BotTier {
 }
 
 /** Tiers gentle enough to apply the struggling-human mercy/backoff below. */
-const GENTLE_TIERS: ReadonlySet<BotTier> = new Set(['rookie', 'bronze']);
+const GENTLE_TIERS: ReadonlySet<BotTier> = new Set([
+  'rookie',
+  'bronze',
+  'silver',
+]);
+
+/**
+ * Ceiling on the *effective* whiff chance after `BotDifficultyService`'s
+ * self-tuned multiplier is applied — without this a tier the calibration
+ * loop has pushed hard toward "gentler" could whiff on nearly every think,
+ * which stops reading as a bot playing badly and starts reading as a bot
+ * that's stopped playing at all.
+ */
+const MAX_EFFECTIVE_WHIFF_CHANCE = 0.85;
 
 /**
  * Extra multiplier on the next think delay while the human hasn't landed a
@@ -143,7 +157,15 @@ export class HeistBotService {
   /** roomCode -> the tier its bot is currently playing at. */
   private readonly tiers = new Map<string, BotTier>();
 
-  constructor(private readonly heist: HeistService) {}
+  constructor(
+    private readonly heist: HeistService,
+    private readonly difficulty: BotDifficultyService,
+  ) {}
+
+  /** The tier currently playing in `roomCode`, if any — read this before `stopBot` clears it. */
+  tierOf(roomCode: string): BotTier | undefined {
+    return this.tiers.get(roomCode);
+  }
 
   /** Starts (or restarts) a ranked-fallback bot, tier derived from the human's live trophies. */
   startBot(
@@ -195,8 +217,10 @@ export class HeistBotService {
     const tier = this.tiers.get(roomCode);
     if (!tier) return;
     const config = TIER_CONFIG[tier];
+    const { thinkMultiplier } = this.difficulty.getMultipliers(tier);
     const delay =
       jitter(randomBetween(config.thinkMs[0], config.thinkMs[1])) *
+      thinkMultiplier *
       delayMultiplier;
 
     const timer = setTimeout(() => {
@@ -241,7 +265,11 @@ export class HeistBotService {
           )
         : candidates;
 
-    const whiffChance = clamp01(jitter(config.whiffChance));
+    const { whiffMultiplier } = this.difficulty.getMultipliers(tier);
+    const whiffChance = Math.min(
+      MAX_EFFECTIVE_WHIFF_CHANCE,
+      clamp01(jitter(config.whiffChance) * whiffMultiplier),
+    );
     const word =
       Math.random() < whiffChance
         ? this.buildWhiff(game.pool, pool)
