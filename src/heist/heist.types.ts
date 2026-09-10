@@ -36,6 +36,36 @@ export const MIN_WORD_LENGTH = 4;
  */
 export const CLAIM_MIN_INTERVAL_MS = 250;
 
+/**
+ * Consecutive failed claims a player gets before the cooldown starts
+ * escalating. Misses this size are just normal human play — a few wrong
+ * guesses in a row shouldn't cost anything.
+ */
+export const CLAIM_FAIL_GRACE = 3;
+
+/**
+ * Ceiling for the escalating cooldown. Past the grace window, each further
+ * consecutive failure doubles the wait (see `claimCooldownMs`), capped here
+ * so a bad streak degrades play without locking anyone out outright — the
+ * point is to make a script walking the dictionary against the live pool
+ * too slow to be worth running, not to punish a human having an off round.
+ */
+export const CLAIM_MAX_INTERVAL_MS = 5_000;
+
+/**
+ * The cooldown a player's next claim must clear, given how many of their
+ * claims in a row have failed. Flat at `CLAIM_MIN_INTERVAL_MS` through the
+ * grace window, then doubles per additional consecutive failure up to
+ * `CLAIM_MAX_INTERVAL_MS`.
+ */
+export function claimCooldownMs(consecutiveFails: number): number {
+  const overGrace = Math.max(0, consecutiveFails - CLAIM_FAIL_GRACE + 1);
+  return Math.min(
+    CLAIM_MIN_INTERVAL_MS * 2 ** overGrace,
+    CLAIM_MAX_INTERVAL_MS,
+  );
+}
+
 /** Vowels the pool is topped up to before consonants are drawn again. The 2-player default. */
 export const MIN_POOL_VOWELS = 2;
 
@@ -130,6 +160,8 @@ export interface HeistGame {
   status: HeistStatus;
   /** playerId -> epoch ms of their last claim attempt, for the rate limit. */
   lastClaimAt: Map<string, number>;
+  /** playerId -> claims in a row that failed, for the escalating cooldown. */
+  consecutiveFails: Map<string, number>;
   /** Vowel floor for this game's pool size — see `minPoolVowels`. */
   minPoolVowels: number;
   /** Drip rate for this game's player count — see `letterIntervalMs`. */

@@ -191,8 +191,13 @@ clients must key word lists on `id` and not on the string.
 - `NOT_A_WORD` also covers words the profanity filter removed at dictionary-generation time. Heist
   is the one game that never emits `PROFANITY_WARNING` — a confirmation dialog inside a
   three-minute race would cost the round it interrupted.
-- `RATE_LIMITED` fires at more than one claim per 250ms per player. Failed claims are free, so
-  without it a scripted client could walk the dictionary against the pool.
+- `RATE_LIMITED` fires at more than one claim per 250ms per player, same as before — but that
+  floor now escalates: after `CLAIM_FAIL_GRACE` (3) consecutive failed claims from one player, the
+  required gap doubles per further consecutive failure, up to `CLAIM_MAX_INTERVAL_MS` (5s), and
+  resets to 250ms on their next successful claim. A few human misses in a row cost nothing; a
+  script walking the dictionary against the live pool — using `heist:claim`'s own error codes as
+  an oracle, since failed claims are free — grinds to a near-stop instead of running at up to 4
+  attempts/second indefinitely. See `claimCooldownMs` in `heist.types.ts`.
 - `heist:letter` and `heist:state` both fire on the 4-second drip. The event exists so the new
   letter can be animated; the state push is what's authoritative.
 - Errors go **only to the claiming socket**. A missed claim is not news to the opponent, and

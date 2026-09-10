@@ -1,10 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { HEIST_DICTIONARY_RAW } from './heist.dictionary';
 import {
-  CLAIM_MIN_INTERVAL_MS,
+  claimCooldownMs,
   ClaimOutcome,
   ClaimedWord,
   HeistError,
+  HeistErrorCode,
   HeistGame,
   HeistResult,
   HeistScore,
@@ -114,6 +115,7 @@ export class HeistService {
       endsAt: now + ROUND_DURATION_MS,
       status: 'playing',
       lastClaimAt: new Map(),
+      consecutiveFails: new Map(),
       minPoolVowels: minPoolVowels(players.length),
       letterIntervalMs: letterIntervalMs(players.length),
     };
@@ -156,6 +158,7 @@ export class HeistService {
       endsAt: now + ROUND_DURATION_MS,
       status: 'playing',
       lastClaimAt: new Map(),
+      consecutiveFails: new Map(),
       minPoolVowels: minPoolVowels(players.length),
       letterIntervalMs: letterIntervalMs(players.length),
     };
@@ -244,23 +247,34 @@ export class HeistService {
     }
 
     const last = game.lastClaimAt.get(playerId) ?? 0;
-    if (now - last < CLAIM_MIN_INTERVAL_MS) {
+    const fails = game.consecutiveFails.get(playerId) ?? 0;
+    if (now - last < claimCooldownMs(fails)) {
       throw new HeistError('RATE_LIMITED', 'Easy — one at a time.');
     }
     game.lastClaimAt.set(playerId, now);
+
+    // Any exit past this point through `fail` counts against the escalating
+    // cooldown above; a plain `takeSteal`/`takeFromPool` return resets it. A
+    // script walking the dictionary against the live pool lives entirely in
+    // this fail path, so that's what needs to get slower the longer it runs —
+    // a human's occasional miss (within CLAIM_FAIL_GRACE) costs nothing.
+    const fail = (code: HeistErrorCode, message: string): never => {
+      game.consecutiveFails.set(playerId, fails + 1);
+      throw new HeistError(code, message);
+    };
 
     const word = String(rawWord ?? '')
       .trim()
       .toLowerCase();
 
     if (!/^[a-z]+$/.test(word) || word.length < MIN_WORD_LENGTH) {
-      throw new HeistError(
+      return fail(
         'TOO_SHORT',
         `${MIN_WORD_LENGTH} letters or more, letters only.`,
       );
     }
     if (!this.dictionary.has(word)) {
-      throw new HeistError('NOT_A_WORD', `“${word}” isn’t in the dictionary.`);
+      return fail('NOT_A_WORD', `“${word}” isn’t in the dictionary.`);
     }
 
     const poolCounts = letterCounts(game.pool.join(''));
@@ -294,24 +308,23 @@ export class HeistService {
         continue;
       }
 
+      game.consecutiveFails.set(playerId, 0);
       return this.takeSteal(game, playerId, word, target, extra);
     }
 
     // Plain claim out of the pool.
     if (canSpell(letterCounts(word), poolCounts)) {
+      game.consecutiveFails.set(playerId, 0);
       return this.takeFromPool(game, playerId, word);
     }
 
     if (blockedBySuffix) {
-      throw new HeistError(
+      return fail(
         'SUFFIX_STEAL',
         'One letter on the end isn’t a steal — rework it.',
       );
     }
-    throw new HeistError(
-      'LETTERS_UNAVAILABLE',
-      'Those letters aren’t on the table.',
-    );
+    return fail('LETTERS_UNAVAILABLE', 'Those letters aren’t on the table.');
   }
 
   private takeFromPool(

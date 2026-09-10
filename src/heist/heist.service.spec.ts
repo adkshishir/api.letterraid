@@ -168,6 +168,28 @@ describe('HeistService', () => {
       claim(ANA, 'canoe');
       expect(() => claim(BEN, 'rest', 10)).not.toThrow();
     });
+
+    it('escalates the cooldown after repeated failures, resets on success', () => {
+      setPool('canoetsrle');
+
+      // Grace: the first few failures in a row cost nothing extra — 300ms
+      // clears the flat 250ms floor every time.
+      for (let i = 0; i < 3; i++) {
+        expectCode(() => claim(ANA, 'zzzzz', 300), 'NOT_A_WORD');
+      }
+
+      // Past the grace window a 300ms gap is no longer enough — the
+      // cooldown has started doubling.
+      expectCode(() => claim(ANA, 'zzzzz', 300), 'RATE_LIMITED');
+
+      // Clearing that longer cooldown still surfaces the real failure, not
+      // just the rate limit.
+      expectCode(() => claim(ANA, 'zzzzz', 5000), 'NOT_A_WORD');
+
+      // A successful claim resets the streak — back to the flat floor.
+      claim(ANA, 'canoe', 5000);
+      expect(() => claim(ANA, 'rest', 300)).not.toThrow();
+    });
   });
 
   describe('stealing', () => {
