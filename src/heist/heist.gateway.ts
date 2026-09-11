@@ -119,7 +119,31 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     const playerId = asString(data?.playerId);
     const word = asString(data?.word);
 
-    this.guard(client, () => this.performClaim(roomCode, playerId, word));
+    this.guard(client, () => {
+      this.assertOwnsSeat(roomCode, playerId, client.id);
+      this.performClaim(roomCode, playerId, word);
+    });
+  }
+
+  /**
+   * Every player's id is public (broadcast in room/state payloads), so a
+   * `heist:claim` can't be trusted just because it names a valid `playerId` in
+   * the room — a script on any connected client could name someone else's.
+   * This confirms the claim came from the socket currently seated as that
+   * player, the same binding `RoomsService` already tracks for reconnects, so
+   * a script can never grief the other seat's claims or cooldown.
+   */
+  private assertOwnsSeat(
+    roomCode: string,
+    playerId: string,
+    socketId: string,
+  ): void {
+    const seat = this.rooms
+      .getRoom(roomCode)
+      ?.players.find((p) => p.id === playerId);
+    if (!seat || seat.socketId !== socketId) {
+      throw new HeistError('NOT_A_PLAYER', 'You’re not in this game.');
+    }
   }
 
   /**
@@ -152,8 +176,11 @@ export class HeistGateway extends BaseRoomGateway implements OnModuleDestroy {
     @MessageBody() data: HeistPayload,
   ) {
     const roomCode = asString(data?.roomCode);
+    const playerId = asString(data?.playerId);
 
     this.guard(client, () => {
+      this.assertOwnsSeat(roomCode, playerId, client.id);
+
       const room = this.rooms.getRoom(roomCode);
       const players = (room?.players ?? []).map((p) => ({
         id: p.id,
