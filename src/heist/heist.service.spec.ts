@@ -190,6 +190,31 @@ describe('HeistService', () => {
       claim(ANA, 'canoe', 5000);
       expect(() => claim(ANA, 'rest', 300)).not.toThrow();
     });
+
+    it('escalates the cooldown on a sustained streak of fast correct claims too', () => {
+      // A script armed with its own pre-checked word list barely ever fails
+      // — it needs to be throttled on the success path as well, not just the
+      // dictionary-walking failure path above. Pool is exactly the letters
+      // 'wind' + 'oats' + 'rain' + 'sale' + 'corn' + 'tide' need, in order.
+      setPool('windoatsrainsalecorntide');
+
+      // A claim always looks huge next to "never claimed before" (last = 0),
+      // so prime a real last-claim time before measuring gaps against it.
+      claim(ANA, 'wind');
+
+      claim(ANA, 'oats', 300);
+      claim(ANA, 'rain', 300);
+      expect(() => claim(ANA, 'sale', 300)).not.toThrow(); // still within grace
+
+      // Past the grace window, a 300ms gap between correct claims is no
+      // longer plausible either — blocked before 'corn' is even checked, so
+      // its letters are still there for the next claim.
+      expectCode(() => claim(ANA, 'corn', 300), 'RATE_LIMITED');
+
+      // A properly human-paced correct claim resets the streak.
+      claim(ANA, 'corn', 5000);
+      expect(() => claim(ANA, 'tide', 300)).not.toThrow();
+    });
   });
 
   describe('stealing', () => {

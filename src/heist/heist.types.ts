@@ -53,6 +53,20 @@ export const CLAIM_FAIL_GRACE = 3;
 export const CLAIM_MAX_INTERVAL_MS = 5_000;
 
 /**
+ * Gap a *correct* claim needs from the one before it to count as a clean
+ * reset rather than another entry in the fail streak.
+ *
+ * The escalating cooldown below was built to stop a script walking the
+ * dictionary against the pool — but a script hopped up with its own
+ * pre-checked word list barely ever fails, so it was skating under that
+ * defense at the bare `CLAIM_MIN_INTERVAL_MS` floor indefinitely. A real
+ * player reading a shared pool and typing a word doesn't sustain a pace
+ * under this; treating a fast correct claim like a near-miss for streak
+ * purposes closes that gap without touching the score or the claim itself.
+ */
+export const CLAIM_PLAUSIBLE_GAP_MS = 600;
+
+/**
  * The cooldown a player's next claim must clear, given how many of their
  * claims in a row have failed. Flat at `CLAIM_MIN_INTERVAL_MS` through the
  * grace window, then doubles per additional consecutive failure up to

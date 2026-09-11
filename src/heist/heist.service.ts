@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { HEIST_DICTIONARY_RAW } from './heist.dictionary';
 import {
+  CLAIM_PLAUSIBLE_GAP_MS,
   claimCooldownMs,
   ClaimOutcome,
   ClaimedWord,
@@ -251,16 +252,27 @@ export class HeistService {
     if (now - last < claimCooldownMs(fails)) {
       throw new HeistError('RATE_LIMITED', 'Easy — one at a time.');
     }
+    const gapSincePrior = now - last;
     game.lastClaimAt.set(playerId, now);
 
     // Any exit past this point through `fail` counts against the escalating
-    // cooldown above; a plain `takeSteal`/`takeFromPool` return resets it. A
-    // script walking the dictionary against the live pool lives entirely in
-    // this fail path, so that's what needs to get slower the longer it runs —
-    // a human's occasional miss (within CLAIM_FAIL_GRACE) costs nothing.
+    // cooldown above; `succeed` clears it, but only when this claim arrived
+    // at a pace a person plausibly reads-and-types at — see
+    // `CLAIM_PLAUSIBLE_GAP_MS`. A script walking the dictionary lives in the
+    // fail path and a script racing a pre-checked word list lives in this
+    // one, so both need to get slower the longer they run; a human's
+    // occasional miss or lucky quick double (within CLAIM_FAIL_GRACE) costs
+    // nothing either way.
     const fail = (code: HeistErrorCode, message: string): never => {
       game.consecutiveFails.set(playerId, fails + 1);
       throw new HeistError(code, message);
+    };
+    const succeed = <T>(outcome: T): T => {
+      game.consecutiveFails.set(
+        playerId,
+        gapSincePrior >= CLAIM_PLAUSIBLE_GAP_MS ? 0 : fails + 1,
+      );
+      return outcome;
     };
 
     const word = String(rawWord ?? '')
@@ -308,14 +320,12 @@ export class HeistService {
         continue;
       }
 
-      game.consecutiveFails.set(playerId, 0);
-      return this.takeSteal(game, playerId, word, target, extra);
+      return succeed(this.takeSteal(game, playerId, word, target, extra));
     }
 
     // Plain claim out of the pool.
     if (canSpell(letterCounts(word), poolCounts)) {
-      game.consecutiveFails.set(playerId, 0);
-      return this.takeFromPool(game, playerId, word);
+      return succeed(this.takeFromPool(game, playerId, word));
     }
 
     if (blockedBySuffix) {
